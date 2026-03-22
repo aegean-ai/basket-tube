@@ -7,7 +7,7 @@ import torch
 import supervision as sv
 
 
-def build_tracker(model_cfg: str = "sam2.1_hiera_l", checkpoint: str | None = None):
+def build_tracker(model_cfg: str = "configs/sam2.1/sam2.1_hiera_l.yaml", checkpoint: str | None = None):
     """Build a SAM2VideoPredictor from Meta's official package.
 
     The model config and checkpoint are resolved automatically by sam2.
