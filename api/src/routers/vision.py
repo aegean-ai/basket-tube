@@ -177,11 +177,13 @@ async def track(video_id: str, req: TrackRequest):
     sidecar = status_path_for(out)
 
     if out.exists():
+        import json as json_mod
+        data = json_mod.loads(out.read_text())
         return TrackResponse(
             video_id=video_id,
             config_key=cfg_key,
-            n_frames=0,
-            n_tracks=0,
+            n_frames=data.get("n_frames", 0),
+            n_tracks=data.get("n_tracks", 0),
             skipped=True,
         )
 
