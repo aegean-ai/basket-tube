@@ -32,7 +32,10 @@ services:
         API_URL: http://localhost:8080
     restart: unless-stopped
     network_mode: host
-    # Binds to :3000
+    environment:
+      - PORT=8501
+      - HOSTNAME=0.0.0.0
+    # Binds to :8501
 
   # ── STT (Whisper) — GPU ───────────────────────────────────────────
   whisper:
