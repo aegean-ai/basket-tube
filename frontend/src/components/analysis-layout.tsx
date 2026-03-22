@@ -5,6 +5,13 @@ import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AnalysisTabs } from "@/components/analysis-tabs";
 import { PipelineStatusBar } from "@/components/pipeline-status-bar";
+import { PipelineTable } from "@/components/pipeline-table";
+import { PipelineCards } from "@/components/pipeline-cards";
+import { PlayersTable } from "@/components/players-table";
+import { CourtView } from "@/components/court-view";
+import { ChatPanel } from "@/components/chat-panel";
+import { VideoCanvas } from "@/components/video-canvas";
+import { SettingsDialog } from "@/components/settings-dialog";
 import { usePipeline } from "@/hooks/use-pipeline";
 import { useAnalysisSettings } from "@/contexts/analysis-settings-context";
 import type { Video, TabId } from "@/lib/types";
@@ -18,6 +25,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     videos[0]?.id
   );
   const [selectedTab, setSelectedTab] = useState<TabId>("pipeline");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { state, runPipeline, reset } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
 
@@ -48,14 +56,15 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
         onVideoSelect={handleVideoSelect}
         onAnalyze={handleAnalyze}
         isRunning={state.status === "running"}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <SidebarInset>
         <div className="flex flex-1 flex-col gap-4 p-4">
           <PipelineStatusBar state={state} />
 
-          {/* Video player area - placeholder until FE-8 */}
-          <div className="aspect-video w-full rounded-lg border bg-card flex items-center justify-center text-muted-foreground">
-            {selectedVideo ? selectedVideo.title : "Select a video"}
+          {/* Video player area */}
+          <div className="aspect-video w-full rounded-lg border bg-card overflow-hidden">
+            <VideoCanvas videoId={selectedVideoId} />
           </div>
 
           {/* Tabbed panels */}
@@ -63,20 +72,25 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
             selectedTab={selectedTab}
             onTabChange={setSelectedTab}
             pipelineContent={
-              <div className="p-4 text-muted-foreground">Pipeline table — coming in FE-7</div>
+              <>
+                <PipelineCards state={state} />
+                <PipelineTable state={state} />
+              </>
             }
             playersContent={
-              <div className="p-4 text-muted-foreground">Players table — coming in FE-9</div>
+              <PlayersTable
+                videoId={selectedVideoId}
+                pipelineState={state}
+                roster={settings.game_context.roster}
+              />
             }
-            courtContent={
-              <div className="p-4 text-muted-foreground">Court view — coming in FE-10</div>
-            }
-            chatContent={
-              <div className="p-4 text-muted-foreground">Chat — coming in FE-10</div>
-            }
+            courtContent={<CourtView videoId={selectedVideoId} />}
+            chatContent={<ChatPanel />}
           />
         </div>
       </SidebarInset>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </SidebarProvider>
   );
 }

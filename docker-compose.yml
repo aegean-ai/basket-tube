@@ -21,6 +21,19 @@ services:
       - ./api:/app/api
     # Binds to :8080
 
+  # ── Frontend (Next.js) ───────────────────────────────────────────
+  frontend:
+    container_name: basket-tube-frontend
+    profiles: [nvidia, cpu]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        API_URL: http://localhost:8080
+    restart: unless-stopped
+    network_mode: host
+    # Binds to :3000
+
   # ── STT (Whisper) — GPU ───────────────────────────────────────────
   whisper:
     container_name: basket-tube-whisper
