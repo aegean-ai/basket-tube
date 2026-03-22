@@ -70,7 +70,7 @@ Produces the structured text timeline artifact required by the action recognitio
 
 - **Input:** `pipeline_data/api/transcriptions/{stt_model_dir}/{stem}.json` (from transcribe endpoint)
 - **Output:** `pipeline_data/api/analysis/text_timeline/{config_key}/{stem}.json`
-- **Config key inputs:** `{stt_model_dir, source_type, lexicon_version}`
+- **Config key inputs:** `{stt_model_dir, lexicon_version}`
 - **Dependencies:** Transcription must exist (409 if missing)
 
 #### Request

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the multi-container basketball video analysis pipeline (CPU API orchestrator + two GPU inference services) and the captions text timeline endpoint required by the action recognition dataset builder.
+**Goal:** Implement the multi-container basketball video analysis pipeline (CPU API orchestrator + GPU inference service) and the captions text timeline endpoint required by the action recognition dataset builder.
 
-**Architecture:** Three FastAPI services sharing `./pipeline_data` via Docker volumes. CPU API (:8080) orchestrates by calling inference-roboflow (:8091) and inference-vision (:8092) over HTTP, passing `video_id` (not raw paths). Each stage writes config-key-namespaced JSON artifacts with status sidecars for lifecycle tracking. The captions pipeline (download → transcribe → text timeline) runs entirely on the CPU API container.
+**Architecture:** Four containers sharing `./pipeline_data` via Docker volumes: CPU API (:8080), Whisper STT (:8000, speaches image), GPU inference (:8090), and notebook (:8888). CPU API orchestrates by calling the GPU inference service over HTTP, passing `video_id` (not raw paths). Each stage writes config-key-namespaced JSON artifacts with status sidecars for lifecycle tracking. The captions pipeline (download → transcribe → text timeline) runs entirely on the CPU API container.
 
 **Tech Stack:** FastAPI, Pydantic, httpx (async HTTP client), PyTorch 2.7 + CUDA 12.8, Roboflow inference-gpu SDK, SAM2, supervision, sports (roboflow), Docker Compose.
 
@@ -20,19 +20,16 @@
 
 | File | Responsibility |
 |---|---|
-| `api/src/core/artifacts.py` | Config key computation, artifact path resolution, status sidecar read/write, atomic file operations |
+| `api/src/artifacts.py` | Config key computation, artifact path resolution, status sidecar read/write, atomic file operations |
 | `api/src/schemas/vision.py` | All vision pipeline Pydantic request/response models |
-| `api/src/services/vision_service.py` | Async HTTP client to GPU inference services |
+| `api/src/services/vision_service.py` | Async HTTP client to GPU inference service |
+| `api/src/services/whisper_service.py` | Remote HTTP client for Whisper STT (speaches container) |
 | `api/src/routers/vision.py` | 6 stage endpoints + status endpoint, caching/skip logic, dependency enforcement |
-| `inference_roboflow/__init__.py` | Package init |
-| `inference_roboflow/main.py` | FastAPI app: /api/detect, /api/keypoints, /api/ocr, /health |
-| `inference_roboflow/models.py` | Roboflow model loading (local/remote), frame-level inference wrappers |
-| `inference_vision/__init__.py` | Package init |
-| `inference_vision/main.py` | FastAPI app: /api/track, /api/classify-teams, /health |
-| `inference_vision/tracker.py` | SAM2Tracker class (extracted from notebook cell 42) |
-| `inference_vision/classifier.py` | TeamClassifier wrapper (fit + predict, extracted from notebook) |
-| `Dockerfile.roboflow` | GPU image for inference-roboflow |
-| `Dockerfile.vision` | GPU image for inference-vision + notebook |
+| `basket_tube/inference/main.py` | FastAPI app: /api/detect, /api/keypoints, /api/ocr, /api/track, /api/classify-teams, /health |
+| `basket_tube/inference/roboflow/` | Roboflow model loading (local/remote), frame-level inference wrappers |
+| `basket_tube/inference/vision/` | SAM2Tracker, TeamClassifier wrapper |
+| `Dockerfile.api` | CPU API image |
+| `Dockerfile.gpu` | GPU image for inference + notebook |
 | `tests/test_artifacts.py` | Tests for config key, path resolution, status sidecars |
 | `tests/test_vision_schemas.py` | Tests for vision Pydantic models |
 | `tests/test_vision_router.py` | Tests for vision router (mocked GPU services) |
@@ -46,11 +43,11 @@
 
 | File | Change |
 |---|---|
-| `api/src/core/config.py` | Add `inference_roboflow_url`, `inference_vision_url`, `analysis_dir` property |
-| `api/src/core/video_registry.py` | Add `resolve_stem()` alias for `resolve_title()` |
-| `api/src/main.py` | Register vision and captions routers, update app title |
-| `docker-compose.yml` | Replace single notebook service with 4 services |
-| `Dockerfile` | Replace GPU notebook image with CPU API image |
+| `api/src/config.py` | Add `inference_gpu_url`, `whisper_api_url`, `analysis_dir` property |
+| `api/src/video_registry.py` | Add `resolve_stem()` alias for `resolve_title()` |
+| `api/src/main.py` | Register download, transcribe, vision, and captions routers |
+| `docker-compose.yml` | 4 services: api, whisper, inference, notebook |
+| `Dockerfile.api` | CPU API image |
 | `pyproject.toml` | Add `httpx` and `pytest-asyncio` to deps |
 
 ---
@@ -58,14 +55,14 @@
 ### Task 1: Artifact utilities — config key, path resolution, status sidecars
 
 **Files:**
-- Create: `api/src/core/artifacts.py`
+- Create: `api/src/artifacts.py`
 - Test: `tests/test_artifacts.py`
 
 - [ ] **Step 1: Write failing tests for config_key()**
 
 ```python
 # tests/test_artifacts.py
-from api.src.core.artifacts import config_key
+from api.src.artifacts import config_key
 
 
 class TestConfigKey:
@@ -92,12 +89,12 @@ class TestConfigKey:
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_artifacts.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'api.src.core.artifacts'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'api.src.artifacts'`
 
 - [ ] **Step 3: Implement config_key()**
 
 ```python
-# api/src/core/artifacts.py
+# api/src/artifacts.py
 """Artifact management: config keys, path resolution, status sidecars."""
 
 import hashlib
@@ -125,7 +122,7 @@ Expected: 4 PASSED
 ```python
 # tests/test_artifacts.py (append)
 from pathlib import Path
-from api.src.core.artifacts import artifact_path, write_status, read_status
+from api.src.artifacts import artifact_path, write_status, read_status
 
 
 class TestArtifactPath:
@@ -177,14 +174,14 @@ class TestStatusSidecar:
 
 class TestCheckStale:
     def test_active_within_timeout_returns_active(self, tmp_path):
-        from api.src.core.artifacts import check_stale
+        from api.src.artifacts import check_stale
         sidecar = tmp_path / "test.status.json"
         write_status(sidecar, "active")
         result = check_stale(sidecar, timeout_s=600)
         assert result["status"] == "active"
 
     def test_stale_active_returns_pending_and_removes_sidecar(self, tmp_path):
-        from api.src.core.artifacts import check_stale
+        from api.src.artifacts import check_stale
         import json
         sidecar = tmp_path / "test.status.json"
         # Write an active status with an old started_at
@@ -196,7 +193,7 @@ class TestCheckStale:
         assert not sidecar.exists()
 
     def test_complete_status_unchanged(self, tmp_path):
-        from api.src.core.artifacts import check_stale
+        from api.src.artifacts import check_stale
         sidecar = tmp_path / "test.status.json"
         write_status(sidecar, "complete", config_key="c-abc1234")
         result = check_stale(sidecar, timeout_s=600)
@@ -211,7 +208,7 @@ Expected: FAIL — `ImportError`
 - [ ] **Step 7: Implement artifact_path(), write_status(), read_status()**
 
 ```python
-# api/src/core/artifacts.py (append to existing)
+# api/src/artifacts.py (append to existing)
 
 _RENDER_STAGES = {"renders"}
 
@@ -304,7 +301,7 @@ def read_status(sidecar: Path) -> dict:
 
 - [ ] **Step 7b: Implement check_stale() for crash recovery**
 
-Append to `api/src/core/artifacts.py`:
+Append to `api/src/artifacts.py`:
 
 ```python
 def check_stale(sidecar: Path, timeout_s: float = 600.0) -> dict:
@@ -343,7 +340,7 @@ Expected: ALL PASSED
 - [ ] **Step 9: Commit**
 
 ```bash
-git add api/src/core/artifacts.py tests/test_artifacts.py
+git add api/src/artifacts.py tests/test_artifacts.py
 git commit -m "feat: add artifact utilities — config key, path resolution, status sidecars"
 ```
 
@@ -590,8 +587,8 @@ git commit -m "feat: add vision pipeline Pydantic schemas"
 ### Task 3: Config and registry updates
 
 **Files:**
-- Modify: `api/src/core/config.py:69-95`
-- Modify: `api/src/core/video_registry.py:55-58`
+- Modify: `api/src/config.py`
+- Modify: `api/src/video_registry.py`
 - Test: `tests/test_api_scaffold.py` (extend existing)
 
 - [ ] **Step 1: Write failing tests**
@@ -599,31 +596,31 @@ git commit -m "feat: add vision pipeline Pydantic schemas"
 ```python
 # tests/test_artifacts.py (append)
 class TestConfigVisionSettings:
-    def test_inference_roboflow_url_default(self):
-        from api.src.core.config import Settings
+    def test_inference_gpu_url_default(self):
+        from api.src.config import Settings
         s = Settings()
-        assert s.inference_roboflow_url == "http://localhost:8091"
+        assert s.inference_gpu_url == "http://localhost:8090"
 
-    def test_inference_vision_url_default(self):
-        from api.src.core.config import Settings
+    def test_whisper_api_url_default(self):
+        from api.src.config import Settings
         s = Settings()
-        assert s.inference_vision_url == "http://localhost:8092"
+        assert s.whisper_api_url == "http://localhost:8000"
 
     def test_analysis_dir_property(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         s = Settings()
         assert s.analysis_dir == s.data_dir / "analysis"
 
     def test_inference_url_from_env(self, monkeypatch):
-        monkeypatch.setenv("FW_INFERENCE_ROBOFLOW_URL", "http://gpu:9000")
-        from api.src.core.config import Settings
+        monkeypatch.setenv("FW_INFERENCE_GPU_URL", "http://gpu:9000")
+        from api.src.config import Settings
         s = Settings()
-        assert s.inference_roboflow_url == "http://gpu:9000"
+        assert s.inference_gpu_url == "http://gpu:9000"
 
 
 class TestResolveStem:
     def test_resolve_stem_alias(self):
-        from api.src.core.video_registry import resolve_stem, resolve_title
+        from api.src.video_registry import resolve_stem, resolve_title
         # resolve_stem should be the same function as resolve_title
         assert resolve_stem is resolve_title
 ```
@@ -635,12 +632,11 @@ Expected: FAIL — `AttributeError`
 
 - [ ] **Step 3: Add settings to config.py**
 
-Add after line 87 (`whisper_api_url`) in `api/src/core/config.py`:
+Add in `api/src/config.py`:
 
 ```python
-    # GPU inference service URLs
-    inference_roboflow_url: str = "http://localhost:8091"
-    inference_vision_url: str = "http://localhost:8092"
+    # GPU inference service URL
+    inference_gpu_url: str = "http://localhost:8090"
 ```
 
 Add after `dubbed_captions_dir` property:
@@ -653,7 +649,7 @@ Add after `dubbed_captions_dir` property:
 
 - [ ] **Step 4: Add resolve_stem to video_registry.py**
 
-Append to `api/src/core/video_registry.py`:
+Append to `api/src/video_registry.py`:
 
 ```python
 # Alias: spec uses resolve_stem, existing code uses resolve_title
@@ -682,8 +678,8 @@ Expected: ALL PASSED
 - [ ] **Step 7: Commit**
 
 ```bash
-git add api/src/core/config.py api/src/core/video_registry.py tests/test_artifacts.py pyproject.toml uv.lock
-git commit -m "feat: add vision inference URLs, analysis_dir, httpx dep"
+git add api/src/config.py api/src/video_registry.py tests/test_artifacts.py pyproject.toml uv.lock
+git commit -m "feat: add vision inference URL, analysis_dir, httpx dep"
 ```
 
 ---
@@ -710,8 +706,7 @@ from api.src.schemas.vision import InferenceResponse
 @pytest.fixture
 def service():
     return VisionService(
-        roboflow_url="http://localhost:8091",
-        vision_url="http://localhost:8092",
+        gpu_url="http://localhost:8090",
         timeout=10.0,
     )
 
@@ -763,22 +758,20 @@ from typing import Any
 
 
 class VisionService:
-    """Calls inference-roboflow and inference-vision GPU services over HTTP."""
+    """Calls the GPU inference service over HTTP."""
 
     def __init__(
         self,
-        roboflow_url: str = "http://localhost:8091",
-        vision_url: str = "http://localhost:8092",
+        gpu_url: str = "http://localhost:8090",
         timeout: float = 600.0,
     ):
-        self.roboflow_url = roboflow_url.rstrip("/")
-        self.vision_url = vision_url.rstrip("/")
+        self.gpu_url = gpu_url.rstrip("/")
         self.timeout = timeout
 
-    async def _post(self, base_url: str, path: str, payload: dict) -> dict:
-        """POST JSON to a GPU service and return the response dict."""
+    async def _post(self, path: str, payload: dict) -> dict:
+        """POST JSON to the GPU service and return the response dict."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(f"{base_url}{path}", json=payload)
+            resp = await client.post(f"{self.gpu_url}{path}", json=payload)
             resp.raise_for_status()
             return resp.json()
 
@@ -798,31 +791,31 @@ class VisionService:
         self, video_id: str, params: dict, **kw: Any
     ) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.roboflow_url, "/api/detect", payload)
+        return await self._post("/api/detect", payload)
 
     async def keypoints(
         self, video_id: str, params: dict, **kw: Any
     ) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.roboflow_url, "/api/keypoints", payload)
+        return await self._post("/api/keypoints", payload)
 
     async def ocr(
         self, video_id: str, params: dict, **kw: Any
     ) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.roboflow_url, "/api/ocr", payload)
+        return await self._post("/api/ocr", payload)
 
     async def track(
         self, video_id: str, params: dict, **kw: Any
     ) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.vision_url, "/api/track", payload)
+        return await self._post("/api/track", payload)
 
     async def classify_teams(
         self, video_id: str, params: dict, **kw: Any
     ) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.vision_url, "/api/classify-teams", payload)
+        return await self._post("/api/classify-teams", payload)
 ```
 
 - [ ] **Step 4: Run tests**
@@ -916,13 +909,13 @@ class TestSkipOnExists:
     def test_detect_skips_when_output_exists(self, client, tmp_path, monkeypatch):
         """If detection output already exists, return skipped=True."""
         import json
-        from api.src.core import config as cfg_mod
+        from api.src import config as cfg_mod
 
         # Patch data_dir to tmp_path
         monkeypatch.setattr(cfg_mod.settings, "data_dir", tmp_path)
 
         # Create fake output
-        from api.src.core.artifacts import artifact_path, config_key
+        from api.src.artifacts import artifact_path, config_key
         params = {"model_id": "basketball-player-detection-3-ycjdo/4", "confidence": 0.4, "iou_threshold": 0.9}
         cfg_key = config_key(params)
         out = artifact_path(tmp_path, "detections", cfg_key, "Warriors & Lakers Instant Classic - 2021 Play-In Tournament")
@@ -951,7 +944,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from api.src.core.artifacts import (
+from api.src.artifacts import (
     artifact_path,
     check_stale,
     config_key,
@@ -959,8 +952,8 @@ from api.src.core.artifacts import (
     status_path_for,
     write_status,
 )
-from api.src.core.config import settings
-from api.src.core.video_registry import resolve_stem
+from api.src.config import settings
+from api.src.video_registry import resolve_stem
 from api.src.schemas.vision import (
     ClassifyTeamsRequest,
     ClassifyTeamsResponse,
@@ -988,8 +981,7 @@ STAGE_NAMES = ["detections", "tracks", "teams", "jerseys", "court", "renders"]
 
 def _get_vision_service() -> VisionService:
     return VisionService(
-        roboflow_url=settings.inference_roboflow_url,
-        vision_url=settings.inference_vision_url,
+        gpu_url=settings.inference_gpu_url,
     )
 
 
@@ -1304,7 +1296,7 @@ async def status(video_id: str, config_key_filter: str | None = None):
 
 - [ ] **Step 4: Register vision router in main.py**
 
-Add to `api/src/main.py` in `create_app()` after the eval router registration:
+Add to `api/src/main.py` in `create_app()` after the transcribe router registration:
 
 ```python
     from api.src.routers.vision import router as vision_router
@@ -1516,9 +1508,9 @@ def build_timeline(
         lexicon_version: version of normalization rules applied
         stt_model_dir: upstream transcription model directory
     """
-    from api.src.core.artifacts import config_key
+    from api.src.artifacts import config_key
 
-    cfg_params = {"stt_model_dir": stt_model_dir, "source_type": source, "lexicon_version": lexicon_version}
+    cfg_params = {"stt_model_dir": stt_model_dir, "lexicon_version": lexicon_version}
     cfg_key = config_key(cfg_params)
 
     segments = []
@@ -1634,8 +1626,8 @@ class TestCaptionsRouter:
     def test_timeline_skip_on_exists(self, client, tmp_path, monkeypatch):
         """If timeline output already exists, return skipped=True."""
         import json
-        from api.src.core import config as cfg_mod
-        from api.src.core.artifacts import artifact_path, config_key
+        from api.src import config as cfg_mod
+        from api.src.artifacts import artifact_path, config_key
         from api.src.services.text_timeline_service import build_timeline
 
         monkeypatch.setattr(cfg_mod.settings, "data_dir", tmp_path)
@@ -1649,7 +1641,7 @@ class TestCaptionsRouter:
         }))
 
         # Create fake timeline output
-        cfg_params = {"stt_model_dir": "whisper", "source_type": "caption", "lexicon_version": "v0.1"}
+        cfg_params = {"stt_model_dir": "whisper", "lexicon_version": "v0.1"}
         cfg_key = config_key(cfg_params)
         out = artifact_path(tmp_path, "text_timeline", cfg_key, stem)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1677,7 +1669,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from api.src.core.artifacts import (
+from api.src.artifacts import (
     artifact_path,
     atomic_write_json,
     check_stale,
@@ -1686,8 +1678,8 @@ from api.src.core.artifacts import (
     status_path_for,
     write_status,
 )
-from api.src.core.config import settings
-from api.src.core.video_registry import resolve_stem
+from api.src.config import settings
+from api.src.video_registry import resolve_stem
 from api.src.schemas.captions import TextTimelineRequest, TextTimelineResponse
 from api.src.services.text_timeline_service import build_timeline
 
@@ -1716,7 +1708,7 @@ async def timeline(video_id: str, req: TextTimelineRequest | None = None):
     yt_caption_path = settings.youtube_captions_dir / f"{stem}.txt"
     source = "caption" if yt_caption_path.exists() else "stt"
 
-    cfg_params = {"stt_model_dir": req.stt_model_dir, "source_type": source, "lexicon_version": req.lexicon_version}
+    cfg_params = {"stt_model_dir": req.stt_model_dir, "lexicon_version": req.lexicon_version}
     cfg_key = config_key(cfg_params)
     out = artifact_path(settings.data_dir, "text_timeline", cfg_key, stem)
     sidecar = status_path_for(out)
@@ -1789,23 +1781,22 @@ git commit -m "feat: add captions timeline router with skip-on-exists and 409 de
 
 ---
 
-### Task 8: inference-roboflow GPU service
+### Task 8: GPU inference service (basket_tube/inference)
 
 **Files:**
-- Create: `inference_roboflow/__init__.py`
-- Create: `inference_roboflow/main.py`
-- Create: `inference_roboflow/models.py`
+- Create: `basket_tube/inference/main.py` (single FastAPI app with all 5 endpoints)
+- Create: `basket_tube/inference/roboflow/models.py`
 
-- [ ] **Step 1: Create package init**
+- [ ] **Step 1: Create package structure**
 
-```python
-# inference_roboflow/__init__.py
+```bash
+mkdir -p basket_tube/inference/roboflow basket_tube/inference/vision
 ```
 
 - [ ] **Step 2: Implement models.py — Roboflow model loading**
 
 ```python
-# inference_roboflow/models.py
+# basket_tube/inference/roboflow/models.py
 """Roboflow model loading with local/remote mode switching."""
 
 import logging
@@ -1853,11 +1844,11 @@ def run_ocr(model, crop, prompt: str = OCR_PROMPT):
     return model.predict(crop, prompt)[0]
 ```
 
-- [ ] **Step 3: Implement main.py — FastAPI app for inference-roboflow**
+- [ ] **Step 3: Implement main.py — single FastAPI app for all GPU inference**
 
 ```python
-# inference_roboflow/main.py
-"""inference-roboflow GPU service — RF-DETR detection, keypoints, OCR."""
+# basket_tube/inference/main.py
+"""GPU inference service — RF-DETR detection, keypoints, OCR, SAM2 tracking, team classification."""
 
 import json
 import logging
@@ -1871,7 +1862,7 @@ import supervision as sv
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from inference_roboflow.models import (
+from basket_tube.inference.roboflow.models import (
     get_model,
     run_detection,
     run_keypoints,
@@ -1884,15 +1875,13 @@ from inference_roboflow.models import (
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="inference-roboflow")
+app = FastAPI(title="basket-tube-inference")
 
 DATA_DIR = Path(os.environ.get("BT_DATA_DIR", "/app/pipeline_data/api"))
 
 # Re-use the video registry for stem resolution
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from api.src.core.video_registry import resolve_title as resolve_stem
-from api.src.core.artifacts import config_key, artifact_path, atomic_write_json
+from api.src.video_registry import resolve_title as resolve_stem
+from api.src.artifacts import config_key, artifact_path, atomic_write_json
 
 
 class InferenceRequest(BaseModel):
@@ -2113,30 +2102,24 @@ async def ocr(req: InferenceRequest):
 - [ ] **Step 4: Commit**
 
 ```bash
-git add inference_roboflow/
-git commit -m "feat: add inference-roboflow GPU service (detection, keypoints, OCR)"
+git add basket_tube/inference/
+git commit -m "feat: add GPU inference service (detection, keypoints, OCR, tracking, team classification)"
 ```
 
 ---
 
-### Task 9: inference-vision GPU service
+### Task 9: Vision sub-modules (tracker, classifier)
 
 **Files:**
-- Create: `inference_vision/__init__.py`
-- Create: `inference_vision/main.py`
-- Create: `inference_vision/tracker.py`
-- Create: `inference_vision/classifier.py`
+- Create: `basket_tube/inference/vision/tracker.py`
+- Create: `basket_tube/inference/vision/classifier.py`
 
-- [ ] **Step 1: Create package init**
+> **Note:** These modules are imported by `basket_tube/inference/main.py` (Task 8). The tracking and team classification endpoints are part of the single GPU inference service.
 
-```python
-# inference_vision/__init__.py
-```
-
-- [ ] **Step 2: Implement tracker.py — SAM2Tracker extracted from notebook**
+- [ ] **Step 1: Implement tracker.py — SAM2Tracker extracted from notebook**
 
 ```python
-# inference_vision/tracker.py
+# basket_tube/inference/vision/tracker.py
 """SAM2-based multi-object tracker. Extracted from notebook cell 42."""
 
 from __future__ import annotations
@@ -2186,10 +2169,10 @@ class SAM2Tracker:
         )
 ```
 
-- [ ] **Step 3: Implement classifier.py — TeamClassifier wrapper**
+- [ ] **Step 2: Implement classifier.py — TeamClassifier wrapper**
 
 ```python
-# inference_vision/classifier.py
+# basket_tube/inference/vision/classifier.py
 """Team classification wrapper using sports.TeamClassifier."""
 
 import numpy as np
@@ -2210,11 +2193,9 @@ def extract_player_crops(
     return [sv.crop_image(frame, box) for box in boxes]
 ```
 
-- [ ] **Step 4: Implement main.py — FastAPI app for inference-vision**
+- [ ] **Step 3: Track and classify-teams endpoints**
 
-```python
-# inference_vision/main.py
-"""inference-vision GPU service — SAM2 tracking, TeamClassifier."""
+> **Note:** These endpoints are defined in `basket_tube/inference/main.py` (Task 8). The code below shows the endpoint implementations that are part of the single GPU inference FastAPI app.
 
 import json
 import logging
@@ -2229,15 +2210,11 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="inference-vision")
-
 DATA_DIR = Path(os.environ.get("BT_DATA_DIR", "/app/pipeline_data/api"))
 SAM2_REPO = os.environ.get("SAM2_REPO", "/opt/segment-anything-2-real-time")
 
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from api.src.core.video_registry import resolve_title as resolve_stem
-from api.src.core.artifacts import config_key, artifact_path, atomic_write_json
+from api.src.video_registry import resolve_title as resolve_stem
+from api.src.artifacts import config_key, artifact_path, atomic_write_json
 
 
 class InferenceRequest(BaseModel):
@@ -2292,7 +2269,7 @@ async def track(req: InferenceRequest):
         predictor = build_sam2_camera_predictor(sam2_config, checkpoint)
         os.chdir(old_cwd)
 
-        from inference_vision.tracker import SAM2Tracker
+        from basket_tube.inference.vision.tracker import SAM2Tracker
         tracker = SAM2Tracker(predictor)
 
         PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]
@@ -2384,7 +2361,7 @@ async def classify_teams(req: InferenceRequest):
         video_path = DATA_DIR / "videos" / f"{stem}.mp4"
         PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]
 
-        from inference_vision.classifier import extract_player_crops
+        from basket_tube.inference.vision.classifier import extract_player_crops
         from sports import TeamClassifier
 
         # Collect crops at stride intervals
@@ -2457,8 +2434,8 @@ async def classify_teams(req: InferenceRequest):
 - [ ] **Step 5: Commit**
 
 ```bash
-git add inference_vision/
-git commit -m "feat: add inference-vision GPU service (SAM2 tracking, team classification)"
+git add basket_tube/inference/vision/
+git commit -m "feat: add vision sub-modules (SAM2 tracker, team classifier)"
 ```
 
 ---
@@ -2466,13 +2443,12 @@ git commit -m "feat: add inference-vision GPU service (SAM2 tracking, team class
 ### Task 10: Dockerfiles
 
 **Files:**
-- Replace: `Dockerfile` (CPU API)
-- Create: `Dockerfile.roboflow`
-- Create: `Dockerfile.vision`
+- Create: `Dockerfile.api` (CPU API)
+- Create: `Dockerfile.gpu` (single GPU inference image)
 
 - [ ] **Step 1: Write CPU API Dockerfile**
 
-Replace `Dockerfile` with the original CPU-only image:
+Create `Dockerfile.api` — a CPU-only image:
 
 ```dockerfile
 FROM python:3.11-slim
@@ -2503,45 +2479,7 @@ USER $USERNAME
 CMD ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080"]
 ```
 
-- [ ] **Step 2: Write Dockerfile.roboflow**
-
-```dockerfile
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
-
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
-    apt-get -y install --no-install-recommends \
-    curl git ffmpeg libgl1-mesa-glx libglib2.0-0 \
-    && rm -rf /var/cache/apt && apt-get clean
-
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-RUN mkdir -p /etc/pip && pip list --format=freeze > /etc/pip/constraint.txt
-
-WORKDIR /app
-COPY pyproject.toml ./
-# NOTE: Only copying shared utilities from api/src/core/ that GPU services need.
-# config.py is NOT copied — GPU services use BT_ env vars, not FW_ settings.
-COPY api/src/core/artifacts.py api/src/core/
-COPY api/src/core/video_registry.py api/src/core/
-COPY api/src/core/__init__.py api/src/core/
-COPY api/src/__init__.py api/src/
-COPY api/__init__.py api/
-COPY inference_roboflow/ inference_roboflow/
-
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --constraint /etc/pip/constraint.txt \
-    "inference-gpu" "supervision==0.27.0rc4" \
-    "sports @ git+https://github.com/roboflow/sports.git@feat/basketball" \
-    transformers num2words opencv-python-headless "numpy<2" \
-    fastapi uvicorn pyyaml
-
-ENV ONNXRUNTIME_EXECUTION_PROVIDERS="[CUDAExecutionProvider]"
-
-EXPOSE 8091
-CMD ["uvicorn", "inference_roboflow.main:app", "--host", "0.0.0.0", "--port", "8091"]
-```
-
-- [ ] **Step 3: Write Dockerfile.vision**
+- [ ] **Step 2: Write Dockerfile.gpu**
 
 ```dockerfile
 FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
@@ -2567,33 +2505,33 @@ RUN cd /opt/segment-anything-2-real-time/checkpoints \
 
 WORKDIR /app
 COPY pyproject.toml ./
-# NOTE: Only copying shared utilities from api/src/core/ — see Dockerfile.roboflow note.
-COPY api/src/core/artifacts.py api/src/core/
-COPY api/src/core/video_registry.py api/src/core/
-COPY api/src/core/__init__.py api/src/core/
+# NOTE: Only copying shared utilities from api/src/ that GPU services need.
+COPY api/src/artifacts.py api/src/
+COPY api/src/video_registry.py api/src/
 COPY api/src/__init__.py api/src/
 COPY api/__init__.py api/
-COPY inference_vision/ inference_vision/
+COPY basket_tube/ basket_tube/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system --constraint /etc/pip/constraint.txt \
-    "supervision==0.27.0rc4" \
+    "inference-gpu" "supervision==0.27.0rc4" \
     "sports @ git+https://github.com/roboflow/sports.git@feat/basketball" \
-    opencv-python-headless "numpy<2" tqdm \
+    transformers num2words opencv-python-headless "numpy<2" tqdm \
     fastapi uvicorn pyyaml \
     jupyterlab ipywidgets
 
 ENV SAM2_REPO=/opt/segment-anything-2-real-time
+ENV ONNXRUNTIME_EXECUTION_PROVIDERS="[CUDAExecutionProvider]"
 
-EXPOSE 8092
-CMD ["uvicorn", "inference_vision.main:app", "--host", "0.0.0.0", "--port", "8092"]
+EXPOSE 8090
+CMD ["uvicorn", "basket_tube.inference.main:app", "--host", "0.0.0.0", "--port", "8090"]
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add Dockerfile Dockerfile.roboflow Dockerfile.vision
-git commit -m "feat: add Dockerfiles — CPU API, inference-roboflow, inference-vision"
+git add Dockerfile.api Dockerfile.gpu
+git commit -m "feat: add Dockerfiles — CPU API, GPU inference"
 ```
 
 ---
@@ -2613,7 +2551,7 @@ services:
     profiles: [nvidia, cpu]
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.api
       args:
         USER_UID: "${UID:-1000}"
         USER_GID: "${GID:-1000}"
@@ -2621,51 +2559,36 @@ services:
     network_mode: host
     command: ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      - FW_INFERENCE_ROBOFLOW_URL=http://localhost:8091
-      - FW_INFERENCE_VISION_URL=http://localhost:8092
+      - FW_INFERENCE_GPU_URL=http://localhost:8090
+      - FW_WHISPER_API_URL=http://localhost:8000
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
       - ./api:/app/api
     # Binds to :8080
 
-  # ── inference-roboflow (GPU) — detection, keypoints, OCR ─────────
-  inference-roboflow:
-    container_name: basket-tube-roboflow
+  # ── Whisper STT (speaches image) ────────────────────────────────
+  whisper:
+    container_name: basket-tube-whisper
+    profiles: [nvidia]
+    image: ghcr.io/speaches-ai/speaches:latest
+    restart: unless-stopped
+    network_mode: host
+    # Binds to :8000
+
+  # ── GPU inference — detection, keypoints, OCR, tracking, teams ──
+  inference:
+    container_name: basket-tube-inference
     profiles: [nvidia]
     build:
       context: .
-      dockerfile: Dockerfile.roboflow
+      dockerfile: Dockerfile.gpu
     restart: unless-stopped
     network_mode: host
     shm_size: "8gb"
     environment:
       - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
       - INFERENCE_MODE=${INFERENCE_MODE:-local}
-      - BT_DATA_DIR=/app/pipeline_data/api
-    volumes:
-      - ./pipeline_data:/app/pipeline_data
-      - ./video_registry.yml:/app/video_registry.yml:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # Binds to :8091
-
-  # ── inference-vision (GPU) — SAM2 tracking, team classification ──
-  inference-vision:
-    container_name: basket-tube-vision
-    profiles: [nvidia]
-    build:
-      context: .
-      dockerfile: Dockerfile.vision
-    restart: unless-stopped
-    network_mode: host
-    shm_size: "8gb"
-    environment:
       - SAM2_REPO=/opt/segment-anything-2-real-time
       - HF_TOKEN=${HF_TOKEN:-}
       - BT_DATA_DIR=/app/pipeline_data/api
@@ -2679,7 +2602,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # Binds to :8092
+    # Binds to :8090
 
   # ── Notebook (Jupyter + GPU) ─────────────────────────────────────
   notebook:
@@ -2687,7 +2610,7 @@ services:
     profiles: [nvidia]
     build:
       context: .
-      dockerfile: Dockerfile.vision
+      dockerfile: Dockerfile.gpu
     restart: unless-stopped
     network_mode: host
     shm_size: "8gb"
@@ -2733,7 +2656,7 @@ Expected: No errors
 
 ```bash
 git add docker-compose.yml .env.example
-git commit -m "feat: docker-compose with CPU API + 2 GPU inference + notebook"
+git commit -m "feat: docker-compose with CPU API + whisper + GPU inference + notebook"
 ```
 
 ---

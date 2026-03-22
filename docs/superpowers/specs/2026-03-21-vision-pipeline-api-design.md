@@ -5,36 +5,33 @@
 
 ## Overview
 
-BasketTube analyzes basketball game video through a multi-stage computer vision pipeline. The system is split into three containers: a CPU API orchestrator and two GPU inference services, communicating via HTTP with shared filesystem for large artifacts.
+BasketTube analyzes basketball game video through a multi-stage computer vision pipeline. The system is split into four containers: a CPU API orchestrator, a Whisper STT service (speaches), a single GPU inference service, and a notebook service — communicating via HTTP with shared filesystem for large artifacts.
 
 ## Architecture
 
 ```
 ┌─────────────────────────┐       ┌──────────────────────────────┐
-│   CPU API (:8080)       │ HTTP  │ inference-roboflow (:8091)   │
+│   CPU API (:8080)       │ HTTP  │ inference (:8090)            │
 │   FastAPI               │──────▶│ FastAPI                      │
 │                         │       │                              │
 │ • Vision router         │       │ • RF-DETR player detection   │
 │ • Orchestration/caching │       │ • Court keypoint detection   │
 │ • Video download/serve  │       │ • Jersey number OCR          │
-│ • Commentary STT        │       │ • Mode: local GPU or remote  │
-│ • Frontend API          │       │   Roboflow cloud API         │
+│ • Frontend API          │       │ • SAM2 tracking/segmentation │
+│                         │       │ • TeamClassifier (SigLIP)    │
 │                         │       └──────────────────────────────┘
 │                         │
-│                         │       ┌──────────────────────────────┐
-│                         │ HTTP  │ inference-vision (:8092)     │
-│                         │──────▶│ FastAPI                      │
-│                         │       │                              │
-│                         │       │ • SAM2 tracking/segmentation │
-│                         │       │ • TeamClassifier (SigLIP)    │
-│                         │       │ • Always local GPU           │
+│                         │ HTTP  ┌──────────────────────────────┐
+│                         │──────▶│ whisper (:8000)              │
+│                         │       │ speaches                     │
+│                         │       │ • Commentary STT             │
 └────────┬────────────────┘       └──────────┬───────────────────┘
          │                                   │
          └────────── ./pipeline_data ────────┘
                    (shared volume)
 ```
 
-A fourth container (`notebook`) reuses `Dockerfile.vision` with a JupyterLab CMD for prototyping.
+A fourth container (`notebook`) reuses `Dockerfile.gpu` with a JupyterLab CMD for prototyping.
 
 ## Identity Model
 
@@ -42,7 +39,7 @@ A fourth container (`notebook`) reuses `Dockerfile.vision` with a JupyterLab CMD
 
 **`stem`** is the slugified title from `video_registry.yml` (e.g., `Warriors & Lakers Instant Classic - 2021 Play-In Tournament`). It is used only for human-readable filenames on disk.
 
-**Resolution:** A single shared function `resolve_stem(video_id) → stem` (in `api/src/core/video_registry.py`) performs the lookup. All services — CPU API and GPU services — use this function. GPU services receive `video_id` over HTTP and resolve to filesystem paths internally. The registry YAML is mounted read-only into all containers.
+**Resolution:** A single shared function `resolve_stem(video_id) → stem` (in `api/src/video_registry.py`) performs the lookup. All services — CPU API and GPU services — use this function. GPU services receive `video_id` over HTTP and resolve to filesystem paths internally. The registry YAML is mounted read-only into all containers.
 
 **Artifact lookup:** Given a `video_id`, a stage name, and a config key, the canonical artifact path is:
 
@@ -111,12 +108,12 @@ This enables invalidation: if detection is re-run with different parameters, the
 
 ## Pipeline Stages
 
-All paths below are relative to the shared `pipeline_data/` mount. The existing `data_dir` in `api/src/core/config.py` resolves to `pipeline_data/api/` — vision artifacts live under `pipeline_data/api/analysis/` to stay consistent with the existing directory structure.
+All paths below are relative to the shared `pipeline_data/` mount. The existing `data_dir` in `api/src/config.py` resolves to `pipeline_data/api/` — vision artifacts live under `pipeline_data/api/analysis/` to stay consistent with the existing directory structure.
 
 ### Stage 1: Detection
 
 - **Endpoint (CPU API):** `POST /api/vision/detect/{video_id}`
-- **Delegates to:** `inference-roboflow POST /api/detect`
+- **Delegates to:** `inference POST /api/detect`
 - **Model:** `basketball-player-detection-3-ycjdo/4` (RF-DETR)
 - **Input:** `videos/{stem}.mp4`
 - **Output:** `analysis/detections/{config_key}/{stem}.json`
@@ -128,7 +125,7 @@ All paths below are relative to the shared `pipeline_data/` mount. The existing 
 ### Stage 2: Tracking
 
 - **Endpoint (CPU API):** `POST /api/vision/track/{video_id}`
-- **Delegates to:** `inference-vision POST /api/track`
+- **Delegates to:** `inference POST /api/track`
 - **Model:** SAM2.1 Large (`sam2.1_hiera_large.pt`)
 - **Input:** `videos/{stem}.mp4` + `analysis/detections/{det_config_key}/{stem}.json`
 - **Output:** `analysis/tracks/{config_key}/{stem}.json`
@@ -139,7 +136,7 @@ All paths below are relative to the shared `pipeline_data/` mount. The existing 
 ### Stage 3: Team Classification
 
 - **Endpoint (CPU API):** `POST /api/vision/classify-teams/{video_id}`
-- **Delegates to:** `inference-vision POST /api/classify-teams`
+- **Delegates to:** `inference POST /api/classify-teams`
 - **Model:** SigLIP embeddings + UMAP + K-means (via `sports.TeamClassifier`)
 - **Input:** `videos/{stem}.mp4` + `analysis/detections/{det_config_key}/{stem}.json`
 - **Output:** `analysis/teams/{config_key}/{stem}.json`
@@ -170,7 +167,7 @@ The `palette` section holds team names and colors. These are initially auto-assi
 ### Stage 4: Jersey Number OCR
 
 - **Endpoint (CPU API):** `POST /api/vision/ocr/{video_id}`
-- **Delegates to:** `inference-roboflow POST /api/ocr`
+- **Delegates to:** `inference POST /api/ocr`
 - **Model:** `basketball-jersey-numbers-ocr/3` (SmolVLM2)
 - **Input:** `videos/{stem}.mp4` + `analysis/tracks/{track_config_key}/{stem}.json`
 - **Output:** `analysis/jerseys/{config_key}/{stem}.json`
@@ -181,7 +178,7 @@ The `palette` section holds team names and colors. These are initially auto-assi
 ### Stage 5: Court Mapping
 
 - **Endpoint (CPU API):** `POST /api/vision/court-map/{video_id}`
-- **Delegates to:** `inference-roboflow POST /api/keypoints`
+- **Delegates to:** `inference POST /api/keypoints`
 - **CPU computes:** Homography from keypoints + player position transform
 - **Model:** `basketball-court-detection-2/14` (keypoint detection)
 - **Input:** `videos/{stem}.mp4` + `analysis/detections/{det_config_key}/{stem}.json`
@@ -196,7 +193,7 @@ The `palette` section holds team names and colors. These are initially auto-assi
 > **Not in the initial implementation plan.** Defined here to lock in the contract for the action recognition dataset spec.
 
 - **Endpoint (CPU API):** `POST /api/vision/ball-track/{video_id}`
-- **Delegates to:** `inference-vision POST /api/ball-track` (or derived CPU-side from detection output)
+- **Delegates to:** `inference POST /api/ball-track` (or derived CPU-side from detection output)
 - **Input:** `analysis/detections/{det_config_key}/{stem}.json` + `analysis/tracks/{track_config_key}/{stem}.json`
 - **Output:** `analysis/ball_tracks/{config_key}/{stem}.json`
 - **Config key inputs:** `{det_config_key, track_config_key}`
@@ -236,13 +233,12 @@ If a prerequisite is missing, the CPU API returns HTTP 409 with a JSON body indi
 
 ## Execution Model
 
-The CPU API calls stages **sequentially by default**. It does not issue parallel requests to GPU services. This is intentional:
+The CPU API calls stages **sequentially by default**. It does not issue parallel requests to the GPU service. This is intentional:
 
-- Stages 2 (track) and 3 (classify-teams) both hit `inference-vision`. Running them concurrently would require the GPU container to handle concurrent CUDA workloads, with GPU memory budgeting and request queuing — unnecessary complexity for a single-host deployment.
-- Stages 4 (OCR) and 5 (court-map) both hit `inference-roboflow`. Same constraint.
+- All GPU stages hit the single `inference` container (:8090). Running them concurrently would require the GPU container to handle concurrent CUDA workloads, with GPU memory budgeting and request queuing — unnecessary complexity for a single-host deployment.
 - The natural call order is: detect → track → classify-teams → ocr → court-map → render. Each stage is fast to skip if cached.
 
-Parallel execution is a future optimization. It would require adding a request queue (e.g., FastAPI BackgroundTasks or Celery) to each GPU container, with `CUDA_MEM_FRACTION` limits to prevent OOM.
+Parallel execution is a future optimization. It would require adding a request queue (e.g., FastAPI BackgroundTasks or Celery) to the GPU container, with `CUDA_MEM_FRACTION` limits to prevent OOM.
 
 ## Status & Lifecycle
 
@@ -432,49 +428,38 @@ class PipelineStatusResponse(BaseModel):
 
 The CPU API retains the `FW_` env prefix from the inherited foreign-whispers codebase. This prefix is kept for backward compatibility with the existing dubbing pipeline settings. New vision-specific settings are added under the same prefix.
 
-New settings in `api/src/core/config.py`:
+New settings in `api/src/config.py`:
 
 | Setting | Env Var | Default |
 |---|---|---|
-| `inference_roboflow_url` | `FW_INFERENCE_ROBOFLOW_URL` | `http://localhost:8091` |
-| `inference_vision_url` | `FW_INFERENCE_VISION_URL` | `http://localhost:8092` |
+| `inference_gpu_url` | `FW_INFERENCE_GPU_URL` | `http://localhost:8090` |
+| `whisper_api_url` | `FW_WHISPER_API_URL` | `http://localhost:8000` |
 | `analysis_dir` | computed | `data_dir / "analysis"` |
 
-### inference-roboflow (BT_ prefix)
+### GPU inference (BT_ prefix)
 
-GPU inference services use the `BT_` (BasketTube) prefix to distinguish from the CPU API's `FW_` settings.
+The GPU inference service uses the `BT_` (BasketTube) prefix to distinguish from the CPU API's `FW_` settings.
 
 | Env Var | Purpose | Default |
 |---|---|---|
 | `ROBOFLOW_API_KEY` | API key | required |
 | `INFERENCE_MODE` | `local` or `remote` | `local` |
-| `BT_DATA_DIR` | Pipeline data root | `/app/pipeline_data` |
-
-### inference-vision (BT_ prefix)
-
-| Env Var | Purpose | Default |
-|---|---|---|
 | `SAM2_REPO` | SAM2 install path | `/opt/segment-anything-2-real-time` |
 | `HF_TOKEN` | SigLIP model downloads | required |
 | `BT_DATA_DIR` | Pipeline data root | `/app/pipeline_data` |
-
-## GPU Sharing
-
-On a single-GPU host, both `inference-roboflow` and `inference-vision` share the same GPU. They are called sequentially by the CPU API (see Execution Model). If both are idle, their memory footprint is minimal. For multi-GPU hosts, `NVIDIA_VISIBLE_DEVICES` can be set per container to pin each to a specific GPU.
 
 ## Docker
 
 ### Dockerfiles
 
-The current `Dockerfile` (a GPU/notebook image based on `pytorch`) will be replaced. Three new Dockerfiles will be created:
+Two Dockerfiles are used:
 
 | File | Base Image | Purpose |
 |---|---|---|
-| `Dockerfile` | `python:3.11-slim` | CPU API — lightweight orchestrator with FastAPI, no GPU deps |
-| `Dockerfile.roboflow` | `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` | Roboflow inference service — `inference-gpu`, `supervision`, `sports` |
-| `Dockerfile.vision` | `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` | SAM2 + TeamClassifier — SAM2 clone/build/checkpoints, `sports` |
+| `Dockerfile.api` | `python:3.11-slim` | CPU API — lightweight orchestrator with FastAPI, no GPU deps |
+| `Dockerfile.gpu` | `pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime` | Single GPU inference service — `inference-gpu`, `supervision`, `sports`, SAM2, `jupyterlab` |
 
-The `notebook` service reuses `Dockerfile.vision` with a different CMD (`jupyter lab`). The notebook dependency group from `pyproject.toml` (`jupyterlab`, `ipywidgets`) is installed in `Dockerfile.vision`.
+The `notebook` service reuses `Dockerfile.gpu` with a different CMD (`jupyter lab`). The notebook dependency group from `pyproject.toml` (`jupyterlab`, `ipywidgets`) is installed in `Dockerfile.gpu`.
 
 All containers mount `video_registry.yml` read-only for `resolve_stem()`.
 
@@ -485,40 +470,39 @@ All services use `network_mode: host` for simplicity on single-host deployments.
 ```yaml
 services:
   api:
-    build: { dockerfile: Dockerfile }
+    build: { dockerfile: Dockerfile.api }
     profiles: [nvidia, cpu]
     network_mode: host
+    # Binds to :8080
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
 
-  inference-roboflow:
-    build: { dockerfile: Dockerfile.roboflow }
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest
     profiles: [nvidia]
     network_mode: host
-    shm_size: "8gb"
-    GPU reservation
-    volumes:
-      - ./pipeline_data:/app/pipeline_data
-      - ./video_registry.yml:/app/video_registry.yml:ro
+    # Binds to :8000
 
-  inference-vision:
-    build: { dockerfile: Dockerfile.vision }
+  inference:
+    build: { dockerfile: Dockerfile.gpu }
     profiles: [nvidia]
     network_mode: host
     shm_size: "8gb"
-    GPU reservation
+    # GPU reservation
+    # Binds to :8090
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
 
   notebook:
-    build: { dockerfile: Dockerfile.vision }
+    build: { dockerfile: Dockerfile.gpu }
     profiles: [nvidia]
     network_mode: host
     shm_size: "8gb"
     command: ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", ...]
-    GPU reservation
+    # GPU reservation
+    # Binds to :8888
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
@@ -529,27 +513,25 @@ services:
 
 | File | Purpose |
 |---|---|
-| `inference_roboflow/__init__.py` | Package init |
-| `inference_roboflow/main.py` | FastAPI app with /api/detect, /api/keypoints, /api/ocr |
-| `inference_roboflow/models.py` | Model loading and inference wrappers |
-| `inference_vision/__init__.py` | Package init |
-| `inference_vision/main.py` | FastAPI app with /api/track, /api/classify-teams |
-| `inference_vision/tracker.py` | SAM2Tracker class (extracted from notebook) |
-| `inference_vision/classifier.py` | TeamClassifier wrapper |
+| `basket_tube/inference/main.py` | FastAPI app with /api/detect, /api/keypoints, /api/ocr, /api/track, /api/classify-teams |
+| `basket_tube/inference/roboflow/` | Roboflow model loading and inference wrappers |
+| `basket_tube/inference/vision/tracker.py` | SAM2Tracker class (extracted from notebook) |
+| `basket_tube/inference/vision/classifier.py` | TeamClassifier wrapper |
 | `api/src/routers/vision.py` | CPU API vision pipeline router (6 stage endpoints + status) |
 | `api/src/schemas/vision.py` | Per-stage request/response Pydantic models |
-| `api/src/services/vision_service.py` | HTTP client to GPU services (httpx async) |
-| `Dockerfile.roboflow` | GPU Dockerfile for Roboflow inference |
-| `Dockerfile.vision` | GPU Dockerfile for SAM2 + TeamClassifier + notebook |
+| `api/src/services/vision_service.py` | HTTP client to GPU inference service (httpx async) |
+| `api/src/services/whisper_service.py` | Remote HTTP client for Whisper STT (speaches container) |
+| `Dockerfile.api` | CPU API Dockerfile |
+| `Dockerfile.gpu` | GPU Dockerfile for all inference + notebook |
 
 ## Existing Code Modified
 
 | File | Change |
 |---|---|
-| `api/src/core/config.py` | Add `inference_roboflow_url`, `inference_vision_url`, `analysis_dir` |
-| `api/src/main.py` | Register vision router |
-| `api/src/core/video_registry.py` | Add `resolve_stem()` alias (if not already present) |
+| `api/src/config.py` | Add `inference_gpu_url`, `whisper_api_url`, `analysis_dir` |
+| `api/src/main.py` | Register download, transcribe, vision, and captions routers |
+| `api/src/video_registry.py` | Add `resolve_stem()` alias (if not already present) |
 
 ## Existing Code Unchanged
 
-All foreign-whispers routers (download, transcribe, translate, tts, stitch, eval), services, and inference backends remain functional for the commentary analysis side of BasketTube.
+The existing download and transcribe routers, services, and Whisper backend remain functional for the commentary analysis side of BasketTube.
