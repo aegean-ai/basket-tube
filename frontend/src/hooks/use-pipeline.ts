@@ -1,215 +1,174 @@
+// src/hooks/use-pipeline.ts
 "use client";
 
 import { useCallback, useReducer } from "react";
-import type {
-  PipelineStage,
-  PipelineState,
-  StageState,
-  StudioSettings,
-  Video,
-  VideoVariant,
-} from "@/lib/types";
-import {
-  downloadVideo,
-  transcribeVideo,
-  translateVideo,
-  synthesizeSpeech,
-  stitchVideo,
-} from "@/lib/api";
-import { computeConfigEntries, type ConfigEntry } from "@/lib/config-id";
+import type { PipelineState, VisionStage, StageState, AnalysisSettings } from "@/lib/types";
+import * as api from "@/lib/api";
 
-const STAGES: PipelineStage[] = [
-  "download",
-  "transcribe",
-  "translate",
-  "tts",
-  "stitch",
+const STAGES: VisionStage[] = [
+  "download", "transcribe", "detect", "track", "ocr", "classify-teams", "court-map", "render",
 ];
 
-function initialStages(): Record<PipelineStage, StageState> {
-  return Object.fromEntries(
-    STAGES.map((s) => [s, { status: "pending" as const }])
-  ) as Record<PipelineStage, StageState>;
-}
+const INITIAL_STAGE: StageState = { status: "pending" };
 
 const INITIAL_STATE: PipelineState = {
   status: "idle",
-  stages: initialStages(),
-  selectedStage: "download",
-  variants: [],
+  stages: Object.fromEntries(STAGES.map((s) => [s, INITIAL_STAGE])) as Record<VisionStage, StageState>,
+  videoId: undefined,
 };
 
-function makeVariantId(videoId: string, configId: string): string {
-  return `${videoId}::${configId}`;
-}
-
 type Action =
-  | { type: "START"; videoId: string; settings: StudioSettings; configs: ConfigEntry[] }
-  | { type: "STAGE_ACTIVE"; stage: PipelineStage }
-  | { type: "STAGE_COMPLETE"; stage: PipelineStage; result: unknown; duration_ms: number; skipped?: boolean }
-  | { type: "STAGE_ERROR"; stage: PipelineStage; error: string }
-  | { type: "SELECT_STAGE"; stage: PipelineStage }
-  | { type: "PIPELINE_COMPLETE" }
-  | { type: "SELECT_VARIANT"; variantId: string }
+  | { type: "START"; videoId: string }
+  | { type: "STAGE_ACTIVE"; stage: VisionStage }
+  | { type: "STAGE_COMPLETE"; stage: VisionStage; result: unknown; config_key?: string; duration_ms: number }
+  | { type: "STAGE_ERROR"; stage: VisionStage; error: string }
+  | { type: "STAGE_SKIPPED"; stage: VisionStage; config_key?: string }
+  | { type: "COMPLETE" }
   | { type: "RESET" };
 
 function reducer(state: PipelineState, action: Action): PipelineState {
   switch (action.type) {
-    case "RESET":
-      return INITIAL_STATE;
-
-    case "START": {
-      const newVariants: VideoVariant[] = action.configs.map((cfg) => ({
-        id: makeVariantId(action.videoId, cfg.id),
-        sourceVideoId: action.videoId,
-        configId: cfg.id,
-        label: cfg.label,
-        settings: action.settings,
-        status: "processing" as const,
-      }));
-      const newVariantIds = new Set(newVariants.map((v) => v.id));
-      return {
-        ...state,
-        status: "running",
-        videoId: action.videoId,
-        stages: initialStages(),
-        selectedStage: "download",
-        variants: [
-          ...state.variants.filter((v) => !newVariantIds.has(v.id)),
-          ...newVariants,
-        ],
-        activeVariantId: newVariants[0].id,
-      };
-    }
-
+    case "START":
+      return { ...INITIAL_STATE, status: "running", videoId: action.videoId };
     case "STAGE_ACTIVE":
       return {
         ...state,
-        stages: {
-          ...state.stages,
-          [action.stage]: { status: "active", started_at: Date.now() },
-        },
-        selectedStage: action.stage,
+        stages: { ...state.stages, [action.stage]: { status: "active", started_at: Date.now() } },
       };
-
     case "STAGE_COMPLETE":
       return {
         ...state,
         stages: {
           ...state.stages,
           [action.stage]: {
-            status: action.skipped ? "skipped" : "complete",
+            status: "complete",
             result: action.result,
+            config_key: action.config_key,
             duration_ms: action.duration_ms,
           },
         },
-        selectedStage: action.stage,
       };
-
+    case "STAGE_SKIPPED":
+      return {
+        ...state,
+        stages: {
+          ...state.stages,
+          [action.stage]: { status: "skipped", config_key: action.config_key },
+        },
+      };
     case "STAGE_ERROR":
       return {
         ...state,
         status: "error",
-        stages: {
-          ...state.stages,
-          [action.stage]: { status: "error", error: action.error },
-        },
-        selectedStage: action.stage,
-        variants: state.variants.map((v) =>
-          v.id === state.activeVariantId ? { ...v, status: "error" as const } : v
-        ),
+        stages: { ...state.stages, [action.stage]: { status: "error", error: action.error } },
       };
-
-    case "PIPELINE_COMPLETE":
-      return {
-        ...state,
-        status: "complete",
-        selectedStage: "stitch",
-        variants: state.variants.map((v) =>
-          v.sourceVideoId === state.videoId && v.status === "processing"
-            ? { ...v, status: "complete" as const }
-            : v
-        ),
-      };
-
-    case "SELECT_STAGE":
-      return { ...state, selectedStage: action.stage };
-
-    case "SELECT_VARIANT":
-      return { ...state, activeVariantId: action.variantId };
-
+    case "COMPLETE":
+      return { ...state, status: "complete" };
+    case "RESET":
+      return INITIAL_STATE;
     default:
       return state;
+  }
+}
+
+async function runStage<T>(
+  dispatch: React.Dispatch<Action>,
+  stage: VisionStage,
+  fn: () => Promise<T & { config_key?: string; skipped?: boolean }>,
+): Promise<T & { config_key?: string; skipped?: boolean }> {
+  dispatch({ type: "STAGE_ACTIVE", stage });
+  const start = Date.now();
+  try {
+    const result = await fn();
+    const duration_ms = Date.now() - start;
+    if (result.skipped) {
+      dispatch({ type: "STAGE_SKIPPED", stage, config_key: result.config_key });
+    } else {
+      dispatch({ type: "STAGE_COMPLETE", stage, result, config_key: result.config_key, duration_ms });
+    }
+    return result;
+  } catch (err) {
+    dispatch({ type: "STAGE_ERROR", stage, error: err instanceof Error ? err.message : String(err) });
+    throw err;
   }
 }
 
 export function usePipeline() {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
 
-  const selectStage = useCallback(
-    (stage: PipelineStage) => dispatch({ type: "SELECT_STAGE", stage }),
-    []
-  );
+  const runPipeline = useCallback(
+    async (videoId: string, videoUrl: string, settings: AnalysisSettings) => {
+      dispatch({ type: "START", videoId });
 
-  const selectVariant = useCallback(
-    (variantId: string) => dispatch({ type: "SELECT_VARIANT", variantId }),
-    []
-  );
-
-  const runPipeline = useCallback(async (video: Video, settings: StudioSettings) => {
-    const configs = computeConfigEntries(settings);
-    dispatch({ type: "START", videoId: video.id, settings, configs });
-
-    const run = async <T,>(
-      stage: PipelineStage,
-      fn: () => Promise<T>
-    ): Promise<T> => {
-      dispatch({ type: "STAGE_ACTIVE", stage });
-      const t0 = performance.now();
       try {
-        const result = await fn();
-        const skipped = typeof result === "object" && result !== null && "skipped" in result
-          ? (result as Record<string, unknown>).skipped === true
-          : false;
-        dispatch({
-          type: "STAGE_COMPLETE",
-          stage,
-          result,
-          duration_ms: Math.round(performance.now() - t0),
-          skipped,
-        });
-        return result;
-      } catch (err) {
-        dispatch({
-          type: "STAGE_ERROR",
-          stage,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw err;
+        // 1. Download
+        await runStage(dispatch, "download", () => api.downloadVideo(videoUrl));
+
+        // 2. Transcribe
+        await runStage(dispatch, "transcribe", () => api.transcribeVideo(videoId));
+
+        // 3. Detect
+        const detectResult = await runStage(dispatch, "detect", () =>
+          api.detectPlayers(videoId, {
+            confidence: settings.advanced.confidence,
+            iou_threshold: settings.advanced.iou_threshold,
+          })
+        );
+        const detKey = detectResult.config_key!;
+
+        // 4. Track
+        const trackResult = await runStage(dispatch, "track", () =>
+          api.trackPlayers(videoId, { det_config_key: detKey })
+        );
+        const trackKey = trackResult.config_key!;
+
+        // 5. OCR — capture return value for render
+        const ocrResult = await runStage(dispatch, "ocr", () =>
+          api.ocrJerseys(videoId, {
+            track_config_key: trackKey,
+            ocr_interval: settings.advanced.ocr_interval,
+          })
+        );
+
+        // 6. Classify teams
+        const teamsResult = await runStage(dispatch, "classify-teams", () =>
+          api.classifyTeams(videoId, {
+            det_config_key: detKey,
+            stride: settings.advanced.stride,
+            crop_scale: settings.advanced.crop_scale,
+          })
+        );
+
+        // 7. Court map — capture return value for render
+        const courtResult = await runStage(dispatch, "court-map", () =>
+          api.mapCourt(videoId, { det_config_key: detKey })
+        );
+
+        // 8. Render (stub — will get 501, catch and mark skipped)
+        try {
+          await runStage(dispatch, "render", () =>
+            api.renderVideo(videoId, {
+              det_config_key: detKey,
+              track_config_key: trackKey,
+              teams_config_key: teamsResult.config_key!,
+              jerseys_config_key: ocrResult.config_key!,
+              court_config_key: courtResult.config_key!,
+            })
+          );
+        } catch {
+          // Render is a 501 stub — mark as skipped, don't fail pipeline
+          dispatch({ type: "STAGE_SKIPPED", stage: "render" });
+        }
+
+        dispatch({ type: "COMPLETE" });
+      } catch {
+        // Error already dispatched by runStage
       }
-    };
-
-    try {
-      const dl = await run("download", () => downloadVideo(video.url));
-      await run("transcribe", () => transcribeVideo(dl.video_id, settings.useYoutubeCaptions));
-      await run("translate", () => translateVideo(dl.video_id, "es"));
-
-      // Run TTS + stitch for each config entry.
-      // SELECT_VARIANT before each iteration so STAGE_ERROR marks the correct variant.
-      for (const cfg of configs) {
-        dispatch({ type: "SELECT_VARIANT", variantId: makeVariantId(video.id, cfg.id) });
-        const alignment = cfg.dubbing === "aligned";
-        await run("tts", () => synthesizeSpeech(dl.video_id, cfg.id, alignment));
-        await run("stitch", () => stitchVideo(dl.video_id, cfg.id));
-      }
-
-      dispatch({ type: "PIPELINE_COMPLETE" });
-    } catch {
-      // Error already dispatched in run()
-    }
-  }, []);
+    },
+    [] // no state dependencies — all config keys captured from return values
+  );
 
   const reset = useCallback(() => dispatch({ type: "RESET" }), []);
 
-  return { state, runPipeline, selectStage, selectVariant, reset };
+  return { state, runPipeline, reset };
 }
