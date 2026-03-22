@@ -74,3 +74,28 @@ class TestSkipOnExists:
         resp = client.post("/api/vision/detect/LPDnemFoqVk")
         assert resp.status_code == 200
         assert resp.json()["skipped"] is True
+
+
+class TestArtifactRetrieval:
+    def test_get_artifact_unknown_video_returns_404(self, client):
+        resp = client.get("/api/vision/artifacts/detections/nonexistent?config_key=c-abc1234")
+        assert resp.status_code == 404
+
+    def test_get_artifact_missing_returns_404(self, client, tmp_path, monkeypatch):
+        from api.src import config as cfg_mod
+        monkeypatch.setattr(cfg_mod.settings, "data_dir", tmp_path)
+        resp = client.get("/api/vision/artifacts/detections/LPDnemFoqVk?config_key=c-abc1234")
+        assert resp.status_code == 404
+
+    def test_get_artifact_returns_json(self, client, tmp_path, monkeypatch):
+        import json as json_mod
+        from api.src import config as cfg_mod
+        from api.src.artifacts import artifact_path
+        monkeypatch.setattr(cfg_mod.settings, "data_dir", tmp_path)
+        stem = "Warriors & Lakers Instant Classic - 2021 Play-In Tournament"
+        out = artifact_path(tmp_path, "detections", "c-abc1234", stem)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json_mod.dumps({"n_frames": 10, "frames": []}))
+        resp = client.get("/api/vision/artifacts/detections/LPDnemFoqVk?config_key=c-abc1234")
+        assert resp.status_code == 200
+        assert resp.json()["n_frames"] == 10

@@ -397,3 +397,18 @@ async def status(video_id: str, config_key_filter: str | None = None):
         )
 
     return PipelineStatusResponse(video_id=video_id, stages=stages)
+
+
+@router.get("/artifacts/{stage}/{video_id}")
+async def get_artifact(stage: str, video_id: str, config_key: str):
+    """Return raw artifact JSON for client-side data assembly."""
+    import json as json_mod
+    stem = resolve_stem(video_id)
+    if stem is None:
+        raise HTTPException(404, f"Video '{video_id}' not in registry")
+    if stage not in STAGE_NAMES:
+        raise HTTPException(404, f"Unknown stage '{stage}'")
+    path = artifact_path(settings.data_dir, stage, config_key, stem)
+    if not path.exists():
+        raise HTTPException(404, f"Artifact not found: {stage}/{config_key}")
+    return json_mod.loads(path.read_text())
