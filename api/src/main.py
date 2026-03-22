@@ -94,6 +94,8 @@ def create_app() -> FastAPI:
     app.include_router(stitch_router)
     from api.src.routers.eval import router as eval_router
     app.include_router(eval_router)
+    from api.src.routers.vision import router as vision_router
+    app.include_router(vision_router)
 
     @app.get("/healthz")
     async def healthz():
