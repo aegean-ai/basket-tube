@@ -78,9 +78,11 @@ services:
       - INFERENCE_MODE=${INFERENCE_MODE:-local}
       - HF_TOKEN=${HF_TOKEN:-}
       - BT_DATA_DIR=/app/pipeline_data/api
+      - MODEL_CACHE_DIR=/cache/roboflow
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
+      - inference-cache:/cache
     deploy:
       resources:
         reservations:
@@ -121,4 +123,5 @@ services:
 
 volumes:
   whisper-cache:
+  inference-cache:
   notebook-cache:
