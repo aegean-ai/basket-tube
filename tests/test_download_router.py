@@ -21,7 +21,7 @@ def ui_dir(tmp_path):
 def client(monkeypatch, ui_dir):
     """Test client with models and download functions stubbed."""
     # Patch settings so file I/O goes to tmp_path
-    from api.src.core.config import settings
+    from api.src.config import settings
 
     monkeypatch.setattr(settings, "data_dir", ui_dir)
 

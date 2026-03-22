@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.src.core.config import settings
+from api.src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/videos")
     async def list_videos():
-        from api.src.core.video_registry import get_all_videos
+        from api.src.video_registry import get_all_videos
         return [
             {"id": v.id, "title": v.title, "url": v.url}
             for v in get_all_videos()

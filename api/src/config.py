@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     stt_model_dir: str = "whisper"
 
     # File paths
-    base_dir: Path = Path(__file__).resolve().parent.parent.parent.parent
+    base_dir: Path = Path(__file__).resolve().parent.parent.parent
     data_dir: Path = base_dir / "pipeline_data" / "api"
 
     # ── pipeline directory layout ───────────────────────────────────────

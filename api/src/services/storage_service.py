@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 from pathlib import Path
 
-from api.src.core.config import settings
+from api.src.config import settings
 
 # Lazy import: boto3 is only required when S3StorageBackend is used.
 try:

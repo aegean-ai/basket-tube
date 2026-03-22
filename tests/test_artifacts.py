@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from api.src.core.artifacts import (
+from api.src.artifacts import (
     artifact_path,
     atomic_write_json,
     check_stale,
@@ -168,23 +168,23 @@ class TestCheckStale:
 
 class TestConfigVisionSettings:
     def test_inference_gpu_url_default(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         s = Settings()
         assert s.inference_gpu_url == "http://localhost:8090"
 
     def test_analysis_dir_property(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         s = Settings()
         assert s.analysis_dir == s.data_dir / "analysis"
 
     def test_inference_url_from_env(self, monkeypatch):
         monkeypatch.setenv("FW_INFERENCE_GPU_URL", "http://gpu:9000")
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         s = Settings()
         assert s.inference_gpu_url == "http://gpu:9000"
 
 
 class TestResolveStem:
     def test_resolve_stem_alias(self):
-        from api.src.core.video_registry import resolve_stem, resolve_title
+        from api.src.video_registry import resolve_stem, resolve_title
         assert resolve_stem is resolve_title
