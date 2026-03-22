@@ -190,6 +190,123 @@ Roster editor: table with jersey# (input) → player name (input), add/remove ro
 
 Advanced settings map directly to API request parameters (`DetectRequest`, `ClassifyTeamsRequest`, `OCRRequest`). Parameters not exposed here (e.g., `model_id`, `max_frames`, `n_consecutive`, `keypoint_confidence`, `anchor_confidence`) use server defaults and are not surfaced in the UI.
 
+## Configuration Model
+
+Configuration is split into three layers:
+
+### Layer 1: User Session Config
+
+Human-editable settings managed in the frontend UI. Persisted per-video as JSON so they survive page reloads:
+
+```
+pipeline_data/api/settings/{video_id}.json
+```
+
+```json
+{
+  "game_context": {
+    "teams": {
+      "0": {"name": "New York Knicks", "color": "#006BB6"},
+      "1": {"name": "Boston Celtics", "color": "#007A33"}
+    },
+    "roster": {"11": "Brunson", "30": "Curry", "23": "James"}
+  },
+  "advanced": {
+    "confidence": 0.4,
+    "iou_threshold": 0.9,
+    "ocr_interval": 5,
+    "crop_scale": 0.4,
+    "stride": 30
+  }
+}
+```
+
+The frontend loads this on video select and saves on any change. The settings dialog edits this object. This is the only mutable config — everything downstream is derived from it.
+
+**API endpoints for settings persistence:**
+
+```
+GET  /api/settings/{video_id}          → returns saved settings or defaults
+PUT  /api/settings/{video_id}          → saves settings JSON
+```
+
+### Layer 2: Reproducibility Config (Resolved + Frozen)
+
+Before each API call, the frontend resolves the user session config into per-stage request parameters. The API freezes these into a `config.resolved.json` alongside the artifact:
+
+```
+analysis/detections/c-a3f82b1/
+  ├── video-stem.json           # artifact data
+  ├── video-stem.status.json    # lifecycle sidecar
+  └── config.resolved.json      # frozen snapshot of all params that produced this config key
+```
+
+```json
+{
+  "config_key": "c-a3f82b1",
+  "stage": "detections",
+  "params": {
+    "model_id": "basketball-player-detection-3-ycjdo/4",
+    "confidence": 0.4,
+    "iou_threshold": 0.9
+  },
+  "upstream": {},
+  "resolved_at": "2026-03-22T10:30:00Z"
+}
+```
+
+For stages with upstream dependencies, the resolved config also records which upstream config keys were used:
+
+```json
+{
+  "config_key": "c-b2a91e3",
+  "stage": "tracks",
+  "params": {
+    "sam2_checkpoint": "sam2.1_hiera_large.pt"
+  },
+  "upstream": {
+    "detections": "c-a3f82b1"
+  },
+  "resolved_at": "2026-03-22T10:31:42Z"
+}
+```
+
+The config key is computed from `params` + `upstream` keys only — never from timestamps, user names, or presentation-only fields. The `config.resolved.json` is the source of truth for what produced the artifact; the config key is a content-addressable shorthand.
+
+### Layer 3: System/Runtime Config
+
+Environment variables and deployment settings. Not part of user or run config:
+
+| Env Var | Purpose |
+|---|---|
+| `FW_INFERENCE_GPU_URL` | GPU service URL |
+| `FW_WHISPER_API_URL` | Whisper service URL |
+| `BT_DATA_DIR` | Pipeline data root |
+| `SAM2_REPO` | SAM2 install path |
+| `ROBOFLOW_API_KEY` | Roboflow API key |
+| `INFERENCE_MODE` | local or remote |
+
+These are never hashed into config keys and never exposed in the UI.
+
+### Frontend → API Flow
+
+```
+User edits settings in UI
+  ↓ saves to pipeline_data/api/settings/{video_id}.json (via PUT /api/settings/{id})
+  ↓
+User clicks "Analyze"
+  ↓ frontend resolves session config into per-stage request params
+  ↓ POST /api/vision/detect/{id} with {confidence: 0.4, iou_threshold: 0.9, model_id: "..."}
+  ↓
+API receives request
+  ↓ computes config_key from params
+  ↓ writes config.resolved.json alongside artifact
+  ↓ processes and writes artifact
+  ↓ returns {config_key, ...} to frontend
+  ↓
+Frontend stores config_key → passes to downstream stages
+```
+
 ## Types
 
 ### `lib/types.ts`
@@ -267,9 +384,13 @@ interface ChatMessage {
 ### `lib/api.ts`
 
 ```typescript
-// Kept from foreign-whispers
+// Video + STT
 downloadVideo(url: string): Promise<DownloadResponse>
 transcribeVideo(videoId: string, useYoutubeCaptions?: boolean): Promise<TranscribeResponse>
+
+// Settings persistence (Layer 1)
+getSettings(videoId: string): Promise<AnalysisSettings>              // GET /api/settings/{id}
+saveSettings(videoId: string, settings: AnalysisSettings): Promise<void>  // PUT /api/settings/{id}
 
 // New — vision pipeline
 detectPlayers(videoId: string, params?: DetectRequest): Promise<DetectResponse>
@@ -328,7 +449,7 @@ getVideoUrl(videoId: string): string                    // original source video
 | `court-view.tsx` | Placeholder court visualization |
 | `chat-panel.tsx` | Chat UI shell (message list + input, placeholder backend) |
 | `analysis-tabs.tsx` | Tab container (Pipeline \| Players \| Court \| Chat) |
-| `contexts/analysis-settings-context.tsx` | GameContext + AdvancedSettings state provider |
+| `contexts/analysis-settings-context.tsx` | GameContext + AdvancedSettings state provider, persists via settings API |
 
 ### Keep As-Is
 
@@ -363,9 +484,41 @@ usePipeline hook
   ↓ tracks stages[].status, duration_ms, error
 
 useAnalysisSettings hook
-  ↓ gameContext: team names, colors, rosters
-  ↓ advanced: confidence, iou, ocr_interval, stride
+  ↓ loads from GET /api/settings/{videoId} on video select
+  ↓ saves via PUT /api/settings/{videoId} on change
+  ↓ resolves into per-stage request params before API calls
 ```
+
+## Backend Changes Required
+
+The frontend redesign requires two small backend additions (not in the vision pipeline API spec):
+
+### Settings persistence endpoints
+
+```
+GET  /api/settings/{video_id}   → returns AnalysisSettings JSON (or defaults if not saved)
+PUT  /api/settings/{video_id}   → saves AnalysisSettings JSON
+```
+
+Stored at `pipeline_data/api/settings/{video_id}.json`. No database — just atomic JSON file read/write using the existing `atomic_write_json()` utility.
+
+New files:
+- `api/src/routers/settings.py` — GET/PUT endpoints
+- `api/src/schemas/settings.py` — AnalysisSettings Pydantic model
+
+Register in `api/src/main.py`.
+
+### Artifact retrieval endpoint
+
+```
+GET /api/vision/artifacts/{stage}/{video_id}?config_key={key}
+```
+
+Returns raw artifact JSON for client-side data assembly (Players tab). Added to the existing `api/src/routers/vision.py`.
+
+### Resolved config snapshots
+
+The existing `api/src/artifacts.py` gains a `write_resolved_config()` function that writes `config.resolved.json` alongside each artifact. Called by each vision stage endpoint after computing the config key.
 
 ## Implementation Notes
 
