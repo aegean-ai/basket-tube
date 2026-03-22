@@ -26,12 +26,14 @@ dependencies = [
     "setuptools<81",
     "pyyaml>=6.0.3",
     "logfire",
+    "httpx",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "httpx",
+    "pytest-asyncio",
     "nbconvert>=7.17.0",
 ]
 alignment = [
