@@ -191,6 +191,25 @@ The `palette` section holds team names and colors. These are initially auto-assi
 - **Default parameters:** keypoint_confidence=0.3, anchor_confidence=0.5
 - **Dependencies:** Stage 1
 
+### Stage 5b: Ball Tracking & Possession (future)
+
+> **Not in the initial implementation plan.** Defined here to lock in the contract for the action recognition dataset spec.
+
+- **Endpoint (CPU API):** `POST /api/vision/ball-track/{video_id}`
+- **Delegates to:** `inference-vision POST /api/ball-track` (or derived CPU-side from detection output)
+- **Input:** `analysis/detections/{det_config_key}/{stem}.json` + `analysis/tracks/{track_config_key}/{stem}.json`
+- **Output:** `analysis/ball_tracks/{config_key}/{stem}.json`
+- **Config key inputs:** `{det_config_key, track_config_key}`
+- **Content:**
+  - Per-frame ball position (from class_id 0 detections)
+  - Ball height/arc estimation
+  - Player-to-ball proximity per frame
+  - Possession state (which tracker_id is closest/possessing)
+  - Possession change events with timestamps
+- **Dependencies:** Stages 1, 2
+
+This stage is required by the action recognition dataset builder for grounding shot attempts, rebounds, steals, and possession-based labels.
+
 ### Stage 6: Render
 
 - **Endpoint (CPU API):** `POST /api/vision/render/{video_id}`
