@@ -7,7 +7,7 @@ import torch
 import supervision as sv
 
 
-def build_tracker(model_cfg: str = "configs/sam2.1/sam2.1_hiera_l.yaml", checkpoint: str | None = None):
+def build_tracker(model_cfg: str = "configs/sam2.1/sam2.1_hiera_b+.yaml", checkpoint: str | None = None):
     """Build a SAM2VideoPredictor from Meta's official package.
 
     The model config and checkpoint are resolved automatically by sam2.
@@ -27,8 +27,16 @@ class SAM2Tracker:
         self._prompted = False
 
     def init_video(self, video_path: str) -> None:
-        """Initialize tracking state from a video file."""
-        self._inference_state = self.predictor.init_state(video_path=video_path)
+        """Initialize tracking state from a video file.
+
+        Offloads video frames and state to CPU RAM to avoid GPU OOM
+        on long videos. Frames are moved to GPU only during processing.
+        """
+        self._inference_state = self.predictor.init_state(
+            video_path=video_path,
+            offload_video_to_cpu=True,
+            offload_state_to_cpu=True,
+        )
 
     def prompt_frame(self, frame_idx: int, detections: sv.Detections) -> None:
         """Add bounding box prompts for objects in a specific frame."""
