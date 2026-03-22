@@ -1,8 +1,10 @@
-# Foreign Whispers
+# BasketTube
 
 [![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-Source_Available-blue.svg)](./LICENSE)
 
-YouTube video dubbing pipeline — transcribe, translate, and dub 60 Minutes interviews into a target language.
+AI-powered basketball game analysis — detect, track, and identify players using computer vision, with commentary-based insights via speech-to-text.
+
+An [aegean.ai](https://aegean.ai/products/tech-demonstrators/sports-analytics) tech demonstrator.
 
 ## Architecture
 
@@ -12,238 +14,186 @@ flowchart LR
         YT[YouTube URL]
     end
 
-    subgraph Pipeline
+    subgraph "CPU API :8080"
         DL[Download<br/>yt-dlp]
-        TR[Transcribe<br/>Whisper]
-        TL[Translate<br/>argostranslate]
-        TTS[Synthesize Speech<br/>Chatterbox GPU]
-        ST[Render Dubbed Video<br/>ffmpeg remux]
+        STT[Transcribe<br/>Whisper]
+        TL[Text Timeline<br/>Lexicon normalization]
+        ORCH[Vision Orchestrator<br/>Stage sequencing + caching]
+    end
+
+    subgraph "GPU Inference :8090"
+        DET[Detect Players<br/>RF-DETR]
+        TRK[Track Players<br/>SAM2]
+        TEAM[Classify Teams<br/>SigLIP + K-means]
+        OCR[Jersey OCR<br/>SmolVLM2]
+        COURT[Court Mapping<br/>Keypoint homography]
     end
 
     subgraph Output
-        VID[Dubbed Video<br/>+ WebVTT captions]
+        ART[Analysis Artifacts<br/>JSON + annotated video]
     end
 
-    subgraph Stack
-        FE[Next.js Frontend<br/>:8501]
-        API[FastAPI Backend<br/>:8080]
-    end
+    YT --> DL --> STT --> TL
+    DL --> ORCH
+    ORCH --> DET --> TRK --> ART
+    DET --> TEAM --> ART
+    DET --> COURT --> ART
+    TRK --> OCR --> ART
 
-    YT --> DL --> TR --> TL --> TTS --> ST --> VID
-
-    FE -- /api/* proxy --> API
-    API --> DL
-
-    classDef default fill:#37474f,color:#fff,stroke:#546e7a
-    classDef pipeline fill:#0277bd,color:#fff,stroke:#01579b
-    classDef stack fill:#00695c,color:#fff,stroke:#004d40
+    classDef cpu fill:#0277bd,color:#fff,stroke:#01579b
+    classDef gpu fill:#e65100,color:#fff,stroke:#bf360c
     classDef io fill:#4527a0,color:#fff,stroke:#311b92
 
-    class YT,VID io
-    class DL,TR,TL,TTS,ST pipeline
-    class FE,API stack
+    class YT,ART io
+    class DL,STT,TL,ORCH cpu
+    class DET,TRK,TEAM,OCR,COURT gpu
 ```
 
 ## Quick Start
 
-Two profiles are available via Docker Compose:
-
 ```bash
-# NVIDIA GPU — Whisper + Chatterbox on dedicated GPU containers
+# 1. Set API keys
+cp .env.example .env
+# Edit .env: HF_TOKEN, ROBOFLOW_API_KEY
+
+# 2. Start with GPU
 docker compose --profile nvidia up -d
 
-# CPU only — no GPU containers (STT/TTS must be provided externally)
-docker compose --profile cpu up -d
+# 3. Open
+# API:      http://localhost:8080
+# Notebook: http://localhost:8888
 ```
 
-Open **http://localhost:8501** in your browser.
+## Containers
+
+| Container | Port | Dockerfile | Purpose |
+|-----------|------|------------|---------|
+| `basket-tube-api` | 8080 | `Dockerfile.api` | CPU orchestrator — download, transcribe, vision routing, captions |
+| `basket-tube-inference` | 8090 | `Dockerfile.gpu` | GPU inference — all 5 vision model endpoints |
+| `basket-tube-notebook` | 8888 | `Dockerfile.gpu` | JupyterLab for prototyping (reuses GPU image) |
+
+All containers share `./pipeline_data` via Docker volume and `video_registry.yml` read-only.
+
+## API Orchestration Model
+
+The CPU API orchestrates the vision pipeline **synchronously per request**:
+
+1. Client calls a stage endpoint (e.g. `POST /api/vision/detect/{video_id}`)
+2. CPU API checks if cached output exists → returns `skipped: true` immediately if so
+3. CPU API writes an "active" status sidecar to prevent duplicate runs
+4. CPU API makes a single `await httpx.post()` to the GPU service at `:8090` — async I/O (non-blocking for other FastAPI requests) but the client waits for the response
+5. GPU service processes all video frames, writes result JSON atomically (`.tmp` + rename)
+6. CPU API writes "complete" status sidecar and returns the response
+
+**Key design decisions:**
+- **No background task queue** — each request is synchronous from the client's perspective
+- **Stages are independent** — the client decides when to call the next stage, not the API
+- **Config-key namespacing** — each parameter combination produces a unique output directory (`c-{hash}`), so changing confidence or swapping models never returns stale results
+- **Crash recovery** — stale "active" sidecars older than 600s are automatically cleared
 
 ## Pipeline Stages
 
-| Stage | What it does | Output |
-|-------|-------------|--------|
-| **Download** | Fetch video + captions from YouTube via yt-dlp | `videos/`, `youtube_captions/` |
-| **Transcribe** | Speech-to-text via Whisper | `transcriptions/whisper/` |
-| **Translate** | Source → target language via argostranslate (offline, OpenNMT) | `translations/argos/` |
-| **Synthesize Speech** | TTS via Chatterbox (GPU) or Coqui (CPU fallback), time-aligned to original segments | `tts_audio/chatterbox/` |
-| **Render Dubbed Video** | Replace audio track via ffmpeg remux (no re-encoding) | `dubbed_videos/` |
+| Stage | Endpoint | GPU Service | Output |
+|-------|----------|-------------|--------|
+| **Download** | `POST /api/download` | — (CPU) | `videos/{stem}.mp4` |
+| **Transcribe** | `POST /api/transcribe/{id}` | — (CPU, Whisper) | `transcriptions/whisper/{stem}.json` |
+| **Text Timeline** | `POST /api/captions/timeline/{id}` | — (CPU) | `analysis/text_timeline/{config}/{stem}.json` |
+| **Detect** | `POST /api/vision/detect/{id}` | `/api/detect` | `analysis/detections/{config}/{stem}.json` |
+| **Track** | `POST /api/vision/track/{id}` | `/api/track` | `analysis/tracks/{config}/{stem}.json` |
+| **Classify Teams** | `POST /api/vision/classify-teams/{id}` | `/api/classify-teams` | `analysis/teams/{config}/{stem}.json` |
+| **OCR** | `POST /api/vision/ocr/{id}` | `/api/ocr` | `analysis/jerseys/{config}/{stem}.json` |
+| **Court Map** | `POST /api/vision/court-map/{id}` | `/api/keypoints` | `analysis/court/{config}/{stem}.json` |
+| **Render** | `POST /api/vision/render/{id}` | — (CPU, stub) | `analysis/renders/{config}/{stem}.mp4` |
+| **Status** | `GET /api/vision/status/{id}` | — | Pipeline stage status |
 
-Captions are served as WebVTT via the `<track>` element — no subtitle burn-in:
+### Stage Dependencies
 
-| Endpoint | Source | Output |
-|----------|--------|--------|
-| `GET /api/captions/{id}/original` | YouTube captions (generated on the fly) | — |
-| `GET /api/captions/{id}` | Translated segments + YouTube timing offset | `dubbed_captions/*.vtt` |
+```
+detect (1)
+  ├── track (2) ──────────┐
+  │     └── ocr (4) ──────┤
+  ├── classify-teams (3) ──┼──▶ render (6)
+  └── court-map (5) ──────┘
+```
+
+Stages 2, 3, 5 can run after 1. Stage 4 (OCR) needs tracks for temporal validation. Calling a stage without its prerequisites returns HTTP 409.
 
 ## Project Structure
 
 ```
-foreign-whispers/
-├── api/src/                     # FastAPI backend (layered architecture)
-│   ├── main.py                  # App factory + lazy model loading
-│   ├── core/config.py           # Pydantic settings (FW_ env prefix)
-│   ├── routers/                 # Thin route handlers
-│   │   ├── download.py          # POST /api/download
-│   │   ├── transcribe.py        # POST /api/transcribe/{id}
-│   │   ├── translate.py         # POST /api/translate/{id}
-│   │   ├── tts.py               # POST /api/tts/{id}
-│   │   └── stitch.py            # POST /api/stitch/{id}, GET /api/video/*, /api/captions/*
-│   ├── services/                # Business logic (HTTP-agnostic)
-│   ├── schemas/                 # Pydantic request/response models
-│   └── inference/               # ML model backend abstraction
-├── frontend/                    # Next.js + shadcn/ui
-│   ├── src/components/          # Pipeline tracker, video player, result panels
-│   ├── src/hooks/use-pipeline.ts # State machine for pipeline orchestration
-│   └── src/lib/api.ts           # API client
-├── download_video.py            # yt-dlp wrapper
-├── transcribe.py                # Whisper wrapper
-├── translate_en_to_es.py        # argostranslate wrapper
-├── tts_es.py                    # Chatterbox client + time-aligned TTS generation
-├── translated_output.py         # ffmpeg audio remux + legacy subtitle compositing
-├── pipeline_data/               # All intermediate and output files (volume-mounted)
-│   └── api/
-│       ├── videos/              # Downloaded source MP4s
-│       ├── youtube_captions/    # Line-delimited JSON from yt-dlp
-│       ├── transcriptions/
-│       │   └── whisper/         # Whisper output JSON
-│       ├── translations/
-│       │   └── argos/           # argostranslate output JSON
-│       ├── tts_audio/
-│       │   └── chatterbox/       # TTS WAV files per config
-│       ├── dubbed_captions/     # Target-language VTT
-│       ├── dubbed_videos/       # Final dubbed MP4s per config
-│       └── speakers/            # Reference voice clips
-├── docker-compose.yml           # Profiles: nvidia, cpu, apple
-├── Dockerfile                   # Multi-stage: cpu and gpu targets
-└── docs/
-    └── dubbing-alignment-design.md  # TTS temporal alignment literature survey + design
+basket-tube/
+├── api/src/                         # CPU API (FastAPI)
+│   ├── main.py                      # App factory
+│   ├── core/
+│   │   ├── config.py                # Settings (FW_ env prefix)
+│   │   ├── artifacts.py             # Config keys, paths, status sidecars
+│   │   └── video_registry.py        # video_registry.yml loader
+│   ├── routers/
+│   │   ├── download.py              # POST /api/download
+│   │   ├── transcribe.py            # POST /api/transcribe/{id}
+│   │   ├── vision.py                # 6 vision stage endpoints + status
+│   │   └── captions.py              # POST /api/captions/timeline/{id}
+│   ├── schemas/                     # Pydantic models
+│   └── services/                    # Business logic
+│       ├── vision_service.py        # HTTP client to GPU service
+│       └── text_timeline_service.py # Basketball lexicon normalization
+├── basket_tube/                     # GPU inference package
+│   └── inference/
+│       ├── main.py                  # FastAPI app (all 5 endpoints)
+│       ├── roboflow/models.py       # RF-DETR, keypoints, OCR model loading
+│       └── vision/
+│           ├── tracker.py           # SAM2Tracker
+│           └── classifier.py        # TeamClassifier wrapper
+├── notebooks/                       # Jupyter notebooks
+├── frontend/                        # Next.js + shadcn/ui (to be wired)
+├── pipeline_data/api/               # All artifacts (volume-mounted)
+│   ├── videos/                      # Source MP4s
+│   ├── youtube_captions/            # yt-dlp caption JSON
+│   ├── transcriptions/whisper/      # Whisper output
+│   └── analysis/                    # Vision pipeline outputs
+│       ├── detections/{config}/     # RF-DETR per-frame boxes
+│       ├── tracks/{config}/         # SAM2 masks + tracker IDs
+│       ├── teams/{config}/          # Team assignments + palette
+│       ├── jerseys/{config}/        # Validated jersey numbers
+│       ├── court/{config}/          # Court coordinates
+│       ├── renders/{config}/        # Annotated videos
+│       └── text_timeline/{config}/  # Normalized caption segments
+├── video_registry.yml               # Video catalog
+├── Dockerfile.api                   # CPU API image
+├── Dockerfile.gpu                   # GPU inference image (+ notebook)
+└── docker-compose.yml               # 3 services
 ```
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/download` | Download YouTube video + captions |
-| POST | `/api/transcribe/{id}` | Whisper speech-to-text |
-| POST | `/api/translate/{id}` | Source → target language translation |
-| POST | `/api/tts/{id}` | Time-aligned TTS synthesis |
-| POST | `/api/stitch/{id}` | Audio remux (ffmpeg -c:v copy) |
-| GET | `/api/video/{id}` | Stream dubbed video (range requests) |
-| GET | `/api/video/{id}/original` | Stream original video (range requests) |
-| GET | `/api/captions/{id}` | Translated WebVTT captions |
-| GET | `/api/captions/{id}/original` | Original English WebVTT captions |
-| GET | `/api/audio/{id}` | TTS audio (WAV) |
-| GET | `/healthz` | Health check |
 
 ## Development
 
-### Container architecture
-
-```
-Host machine
-├── foreign_whispers/      ← bind-mounted into API container
-├── api/                   ← bind-mounted into API container
-├── pipeline_data/api/     ← bind-mounted into API container
-│
-└── Docker Compose
-    ├── foreign-whispers-stt   (GPU)  :8000  — Whisper inference
-    ├── foreign-whispers-tts   (GPU)  :8020  — Chatterbox inference
-    ├── foreign-whispers-api   (CPU)  :8080  — FastAPI orchestrator
-    └── foreign-whispers-frontend      :8501  — Next.js UI
-```
-
-The API container is CPU-only — it delegates all GPU work to the STT and TTS
-containers via HTTP. The `foreign_whispers/` library and `api/` source are
-**bind-mounted** from the host, so edits on the host are immediately visible
-inside the container.
-
-### Editing and debugging the library
-
-1. **Start all services:**
-
-   ```bash
-   docker compose --profile nvidia up -d
-   ```
-
-2. **Edit any file** in `foreign_whispers/` or `api/` on the host (e.g. in VS Code).
-
-3. **Restart the API container** to pick up changes:
-
-   ```bash
-   docker compose --profile nvidia restart api
-   ```
-
-   To avoid manual restarts, add `--reload` to the uvicorn command in
-   `docker-compose.yml`:
-
-   ```yaml
-   command: ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
-   ```
-
-   With `--reload`, uvicorn watches for file changes and restarts automatically.
-
-4. **Test via the SDK** from a notebook or Python REPL on the host:
-
-   ```python
-   from foreign_whispers import FWClient
-   fw = FWClient()             # connects to http://localhost:8080
-   fw.transcribe("GYQ5yGV_-Oc")
-   ```
-
-5. **Test the library directly** (no Docker needed for pure-Python alignment work):
-
-   ```python
-   from foreign_whispers import global_align, compute_segment_metrics, clip_evaluation_report
-   ```
-
-   This is the two-phase workflow:
-   - **Phase 1 (SDK):** Call `FWClient` methods to drive the pipeline through Docker (download, transcribe, translate, TTS, stitch). Data lands in `pipeline_data/api/`.
-   - **Phase 2 (library):** Import `foreign_whispers` directly to iterate on alignment algorithms using data produced in Phase 1. No GPU or Docker needed.
-
-### Local setup (no Docker)
-
 ```bash
-uv sync                    # install all dependencies
-uv run python -c "from foreign_whispers import FWClient; print('ok')"
+# Run tests
+uv run pytest tests/ -v
+
+# Rebuild after dependency changes
+docker compose --profile nvidia build
+docker compose --profile nvidia up -d
+
+# Tail logs
+docker compose --profile nvidia logs -f
+
+# Stop
+docker compose --profile nvidia down
 ```
 
-For Jupyter/VS Code notebooks, register the kernel once:
+### Environment Variables
 
-```bash
-uv pip install ipykernel
-uv run python -m ipykernel install --user --name foreign-whispers
-```
-
-Then select the **foreign-whispers** kernel in VS Code's kernel picker.
-
-### When to rebuild
-
-| Change | Action needed |
-|--------|--------------|
-| Edit `foreign_whispers/*.py` or `api/**/*.py` | Restart API container (or use `--reload`) |
-| Edit `pyproject.toml` / add dependencies | `docker compose --profile nvidia build api && docker compose --profile nvidia up -d api` |
-| Edit `frontend/` | Frontend has its own hot-reload; no action needed |
-| Edit `docker-compose.yml` | `docker compose --profile nvidia up -d` (re-creates changed services) |
-
-### File ownership
-
-The API container runs as your host UID/GID (set in `.env`), so all files it
-creates in `pipeline_data/` are owned by you — not root. If you see permission
-errors on existing files, they were created by an older root-mode container:
-
-```bash
-sudo chown -R $(id -u):$(id -g) pipeline_data/
-```
-
-### Frontend
-
-```bash
-cd frontend && pnpm install && pnpm dev
-```
+| Variable | Container | Purpose |
+|----------|-----------|---------|
+| `HF_TOKEN` | GPU | Hugging Face token (model downloads) |
+| `ROBOFLOW_API_KEY` | GPU | Roboflow API key |
+| `INFERENCE_MODE` | GPU | `local` (GPU) or `remote` (Roboflow cloud) |
+| `FW_INFERENCE_GPU_URL` | API | GPU service URL (default `http://localhost:8090`) |
+| `FW_WHISPER_MODEL` | API | Whisper model size (default `base`) |
 
 ### Requirements
 
 - Python 3.11
-- ffmpeg (system-wide)
-- deno (for yt-dlp YouTube extraction)
-- NVIDIA GPU recommended for Whisper + Chatterbox inference
+- NVIDIA GPU + CUDA 12.8 (for GPU inference)
+- Docker + Docker Compose
+- ffmpeg
