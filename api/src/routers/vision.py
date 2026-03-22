@@ -25,6 +25,7 @@ from api.src.artifacts import (
     config_key,
     read_status,
     status_path_for,
+    write_resolved_config,
     write_status,
 )
 from api.src.config import settings
@@ -139,6 +140,13 @@ async def detect(video_id: str, req: DetectRequest = DetectRequest()):
         raise HTTPException(status_code=502, detail=f"GPU service unreachable: {exc}") from exc
 
     write_status(sidecar, "complete", config_key=cfg_key)
+    write_resolved_config(
+        output_dir=out.parent,
+        stage="detect",
+        config_key=cfg_key,
+        params=cfg_params,
+        upstream={},
+    )
     return DetectResponse(
         video_id=video_id,
         config_key=cfg_key,
@@ -186,6 +194,13 @@ async def track(video_id: str, req: TrackRequest):
         raise HTTPException(status_code=502, detail=f"GPU service unreachable: {exc}") from exc
 
     write_status(sidecar, "complete", config_key=cfg_key)
+    write_resolved_config(
+        output_dir=out.parent,
+        stage="track",
+        config_key=cfg_key,
+        params=cfg_params,
+        upstream={"detections": req.det_config_key},
+    )
     return TrackResponse(
         video_id=video_id,
         config_key=cfg_key,
@@ -235,6 +250,13 @@ async def classify_teams(video_id: str, req: ClassifyTeamsRequest):
         raise HTTPException(status_code=502, detail=f"GPU service unreachable: {exc}") from exc
 
     write_status(sidecar, "complete", config_key=cfg_key)
+    write_resolved_config(
+        output_dir=out.parent,
+        stage="classify-teams",
+        config_key=cfg_key,
+        params=cfg_params,
+        upstream={"detections": req.det_config_key},
+    )
     return ClassifyTeamsResponse(
         video_id=video_id,
         config_key=cfg_key,
@@ -284,6 +306,13 @@ async def ocr(video_id: str, req: OCRRequest):
         raise HTTPException(status_code=502, detail=f"GPU service unreachable: {exc}") from exc
 
     write_status(sidecar, "complete", config_key=cfg_key)
+    write_resolved_config(
+        output_dir=out.parent,
+        stage="ocr",
+        config_key=cfg_key,
+        params=cfg_params,
+        upstream={"tracks": req.track_config_key},
+    )
     return OCRResponse(
         video_id=video_id,
         config_key=cfg_key,
@@ -333,6 +362,13 @@ async def court_map(video_id: str, req: CourtMapRequest):
         raise HTTPException(status_code=502, detail=f"GPU service unreachable: {exc}") from exc
 
     write_status(sidecar, "complete", config_key=cfg_key)
+    write_resolved_config(
+        output_dir=out.parent,
+        stage="court-map",
+        config_key=cfg_key,
+        params=cfg_params,
+        upstream={"detections": req.det_config_key},
+    )
     return CourtMapResponse(
         video_id=video_id,
         config_key=cfg_key,
