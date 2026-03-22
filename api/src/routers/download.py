@@ -18,21 +18,30 @@ _download_service = DownloadService(ui_dir=settings.data_dir)
 @router.post("/download", response_model=DownloadResponse)
 async def download_endpoint(body: DownloadRequest):
     """Download video and captions, returning video_id and caption segments."""
-    video_id, title = _download_service.get_video_info(body.url)
-
-    # Use title from registry; fall back to yt-dlp title with colons stripped
-    entry = get_video(video_id)
-    stem = entry.title if entry else title.replace(":", "")
-
     videos_dir = settings.videos_dir
     captions_dir = settings.youtube_captions_dir
     videos_dir.mkdir(parents=True, exist_ok=True)
     captions_dir.mkdir(parents=True, exist_ok=True)
 
+    # Check if this is a registered local video (no YouTube download needed)
+    entry = get_video(body.url)
+    if entry and entry.url == "local":
+        stem = entry.title
+        video_path = videos_dir / f"{stem}.mp4"
+        if not video_path.exists():
+            raise HTTPException(404, f"Local video file not found: {stem}.mp4")
+        caption_path = captions_dir / f"{stem}.txt"
+        segments = _download_service.read_caption_segments(caption_path) if caption_path.exists() else []
+        return DownloadResponse(video_id=entry.id, title=stem, caption_segments=segments)
+
+    # YouTube download
+    video_id, title = _download_service.get_video_info(body.url)
+    entry = get_video(video_id)
+    stem = entry.title if entry else title.replace(":", "")
+
     video_path = videos_dir / f"{stem}.mp4"
     caption_path = captions_dir / f"{stem}.txt"
 
-    # Skip re-download if both files exist
     if not video_path.exists():
         _download_service.download_video(body.url, str(videos_dir), stem)
 

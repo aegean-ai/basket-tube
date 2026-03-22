@@ -10,14 +10,7 @@ _YT_RE = re.compile(
 
 
 class DownloadRequest(BaseModel):
-    url: str
-
-    @field_validator("url")
-    @classmethod
-    def validate_youtube_url(cls, v: str) -> str:
-        if not _YT_RE.match(v):
-            raise ValueError("Invalid YouTube URL")
-        return v
+    url: str  # YouTube URL or video_id for local files
 
 
 class CaptionSegment(BaseModel):
