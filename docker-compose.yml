@@ -15,6 +15,7 @@ services:
     environment:
       - FW_INFERENCE_GPU_URL=http://localhost:8090
       - FW_WHISPER_API_URL=http://localhost:8000
+      - FW_LOGFIRE_WRITE_TOKEN=${LOGFIRE_WRITE_TOKEN:-}
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
@@ -79,6 +80,7 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
       - BT_DATA_DIR=/app/pipeline_data/api
       - MODEL_CACHE_DIR=/cache/roboflow
+      - LOGFIRE_TOKEN=${LOGFIRE_WRITE_TOKEN:-}
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro

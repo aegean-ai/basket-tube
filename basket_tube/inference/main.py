@@ -31,8 +31,12 @@ logger = logging.getLogger(__name__)
 # ── Logfire setup ─────────────────────────────────────────────────────
 try:
     import logfire
-    logfire.configure(service_name="basket-tube-inference")
-    _logfire = True
+    _token = os.environ.get("LOGFIRE_TOKEN", "")
+    if _token:
+        logfire.configure(token=_token, service_name="basket-tube-inference")
+        _logfire = True
+    else:
+        _logfire = False
 except ImportError:
     logfire = None  # type: ignore
     _logfire = False
