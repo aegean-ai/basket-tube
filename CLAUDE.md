@@ -86,6 +86,16 @@ Video frames → RF-DETR detection → SAM2 segmentation/tracking → Team class
 - **`sports`** (roboflow, `feat/basketball` branch) — court configuration, team classification, view transforms
 - **`logfire`** — optional observability
 
+### Logfire Observability
+
+Traces and spans are sent to Pydantic Logfire at https://logfire-us.pydantic.dev/pantelis/basket-tube
+
+To debug exceptions using the Logfire MCP server:
+
+```bash
+claude "$(uvx logfire@latest --region us prompt --project pantelis/basket-tube fix-span-issue:<SPAN_ID> --claude)"
+```
+
 ### Environment variables
 
 | Variable | Purpose |
