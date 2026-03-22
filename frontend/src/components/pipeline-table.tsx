@@ -31,7 +31,7 @@ const STAGES: {
   { key: "download", label: "Download", icon: DownloadIcon, description: "Fetch video from the registry" },
   { key: "transcribe", label: "Transcribe", icon: MicIcon, description: "Extract audio commentary via STT" },
   { key: "detect", label: "Detect", icon: ScanSearchIcon, description: "Player detection with RF-DETR" },
-  { key: "track", label: "Track", icon: RouteIcon, description: "Multi-object tracking with ByteTrack" },
+  { key: "track", label: "Track", icon: RouteIcon, description: "Multi-object tracking with SAM2" },
   { key: "ocr", label: "OCR", icon: ScanTextIcon, description: "Jersey number recognition" },
   { key: "classify-teams", label: "Classify Teams", icon: UsersIcon, description: "Team classification via color clustering" },
   { key: "court-map", label: "Court Map", icon: MapIcon, description: "Homography-based bird's-eye mapping" },
