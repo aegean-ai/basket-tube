@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Serif_Display, Geist, Geist_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { StudioSettingsProvider } from "@/contexts/studio-settings-context";
+import { AnalysisSettingsProvider } from "@/contexts/analysis-settings-context";
 import "./globals.css";
 
 const serif = DM_Serif_Display({
@@ -21,8 +21,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Foreign Whispers",
-  description: "YouTube video dubbing pipeline — transcribe, translate, dub",
+  title: "BasketTube",
+  description: "AI-powered basketball game analysis",
 };
 
 export default function RootLayout({
@@ -35,9 +35,9 @@ export default function RootLayout({
       <body
         className={`${serif.variable} ${geist.variable} ${geistMono.variable} min-h-screen bg-background font-sans text-foreground antialiased`}
       >
-        <StudioSettingsProvider>
+        <AnalysisSettingsProvider>
           <TooltipProvider>{children}</TooltipProvider>
-        </StudioSettingsProvider>
+        </AnalysisSettingsProvider>
       </body>
     </html>
   );
