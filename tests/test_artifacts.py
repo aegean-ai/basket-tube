@@ -188,3 +188,35 @@ class TestResolveStem:
     def test_resolve_stem_alias(self):
         from api.src.video_registry import resolve_stem, resolve_title
         assert resolve_stem is resolve_title
+
+
+class TestResolvedConfig:
+    def test_write_resolved_config(self, tmp_path):
+        from api.src.artifacts import write_resolved_config
+        output_dir = tmp_path / "analysis" / "detections" / "c-abc1234"
+        output_dir.mkdir(parents=True)
+        write_resolved_config(
+            output_dir=output_dir, stage="detections", config_key="c-abc1234",
+            params={"confidence": 0.4, "model_id": "test"}, upstream={},
+        )
+        resolved = output_dir / "config.resolved.json"
+        assert resolved.exists()
+        import json
+        data = json.loads(resolved.read_text())
+        assert data["config_key"] == "c-abc1234"
+        assert data["stage"] == "detections"
+        assert data["params"]["confidence"] == 0.4
+        assert data["upstream"] == {}
+        assert "resolved_at" in data
+
+    def test_write_resolved_config_with_upstream(self, tmp_path):
+        from api.src.artifacts import write_resolved_config
+        output_dir = tmp_path / "analysis" / "tracks" / "c-def5678"
+        output_dir.mkdir(parents=True)
+        write_resolved_config(
+            output_dir=output_dir, stage="tracks", config_key="c-def5678",
+            params={"sam2_checkpoint": "sam2.1_hiera_large.pt"}, upstream={"detections": "c-abc1234"},
+        )
+        import json
+        data = json.loads((output_dir / "config.resolved.json").read_text())
+        assert data["upstream"]["detections"] == "c-abc1234"
