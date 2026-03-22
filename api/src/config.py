@@ -16,8 +16,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["*"]
 
     # STT configuration
-    whisper_model: str = "base"
-    whisper_backend: str = "local"  # "local" or "remote"
+    whisper_model: str = "Systran/faster-whisper-medium"
     whisper_api_url: str = "http://localhost:8000"
     stt_model_dir: str = "whisper"
 

@@ -24,7 +24,10 @@ def transcribe(audio_path: str) -> dict:
         response = requests.post(
             url,
             files={"file": (audio_path, f, "audio/wav")},
-            data={"response_format": "verbose_json"},
+            data={
+                "model": settings.whisper_model,
+                "response_format": "verbose_json",
+            },
             timeout=300,
         )
 
