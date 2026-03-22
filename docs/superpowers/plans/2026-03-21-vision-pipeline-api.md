@@ -1,14 +1,16 @@
-# Vision Pipeline API Implementation Plan
+# Vision Pipeline & Captions API Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the multi-container basketball video analysis pipeline: CPU API orchestrator + two GPU inference services (inference-roboflow for detection/keypoints/OCR, inference-vision for SAM2 tracking and team classification).
+**Goal:** Implement the multi-container basketball video analysis pipeline (CPU API orchestrator + two GPU inference services) and the captions text timeline endpoint required by the action recognition dataset builder.
 
-**Architecture:** Three FastAPI services sharing `./pipeline_data` via Docker volumes. CPU API (:8080) orchestrates by calling inference-roboflow (:8091) and inference-vision (:8092) over HTTP, passing `video_id` (not raw paths). Each stage writes config-key-namespaced JSON artifacts with status sidecars for lifecycle tracking.
+**Architecture:** Three FastAPI services sharing `./pipeline_data` via Docker volumes. CPU API (:8080) orchestrates by calling inference-roboflow (:8091) and inference-vision (:8092) over HTTP, passing `video_id` (not raw paths). Each stage writes config-key-namespaced JSON artifacts with status sidecars for lifecycle tracking. The captions pipeline (download → transcribe → text timeline) runs entirely on the CPU API container.
 
 **Tech Stack:** FastAPI, Pydantic, httpx (async HTTP client), PyTorch 2.7 + CUDA 12.8, Roboflow inference-gpu SDK, SAM2, supervision, sports (roboflow), Docker Compose.
 
-**Spec:** `docs/superpowers/specs/2026-03-21-vision-pipeline-api-design.md`
+**Specs:**
+- `docs/superpowers/specs/2026-03-21-vision-pipeline-api-design.md`
+- `docs/superpowers/specs/2026-03-21-captions-api-design.md`
 
 ---
 
@@ -35,6 +37,10 @@
 | `tests/test_vision_schemas.py` | Tests for vision Pydantic models |
 | `tests/test_vision_router.py` | Tests for vision router (mocked GPU services) |
 | `tests/test_vision_service.py` | Tests for HTTP client to GPU services |
+| `api/src/schemas/captions.py` | TextTimelineRequest, TextTimelineResponse |
+| `api/src/services/text_timeline_service.py` | Normalization logic, basketball lexicon, segment transformation |
+| `api/src/routers/captions.py` | POST /api/captions/timeline/{video_id} endpoint |
+| `tests/test_text_timeline.py` | Tests for normalization, timeline construction, skip-on-exists |
 
 ### Modified Files
 
@@ -42,7 +48,7 @@
 |---|---|
 | `api/src/core/config.py` | Add `inference_roboflow_url`, `inference_vision_url`, `analysis_dir` property |
 | `api/src/core/video_registry.py` | Add `resolve_stem()` alias for `resolve_title()` |
-| `api/src/main.py` | Register vision router, update app title |
+| `api/src/main.py` | Register vision and captions routers, update app title |
 | `docker-compose.yml` | Replace single notebook service with 4 services |
 | `Dockerfile` | Replace GPU notebook image with CPU API image |
 | `pyproject.toml` | Add `httpx` and `pytest-asyncio` to deps |
@@ -1324,7 +1330,466 @@ git commit -m "feat: add vision pipeline router with 6 stage endpoints + status"
 
 ---
 
-### Task 6: inference-roboflow GPU service
+### Task 6: Captions schemas and text timeline service
+
+**Files:**
+- Create: `api/src/schemas/captions.py`
+- Create: `api/src/services/text_timeline_service.py`
+- Test: `tests/test_text_timeline.py`
+
+- [ ] **Step 1: Write failing tests for the basketball lexicon normalizer**
+
+```python
+# tests/test_text_timeline.py
+"""Tests for text timeline service — normalization and segment construction."""
+
+from api.src.services.text_timeline_service import normalize_text, build_timeline
+
+
+class TestNormalizeText:
+    def test_lowercase(self):
+        assert normalize_text("Curry FOR THREE!") == "curry for three"
+
+    def test_strip_trailing_punctuation(self):
+        assert normalize_text("He knocks it down!") == "he knocks it down"
+
+    def test_preserve_apostrophes(self):
+        assert normalize_text("can't get it to go") == "can't get it to go"
+
+    def test_three_pointer_synonyms(self):
+        assert "three" in normalize_text("fires from 3")
+        assert "three" in normalize_text("a trey from the corner")
+
+    def test_dunk_synonyms(self):
+        assert "dunk" in normalize_text("What a slam!")
+        assert "dunk" in normalize_text("the jam by James")
+
+    def test_layup_synonyms(self):
+        assert "layup" in normalize_text("nice lay-up")
+        assert "layup" in normalize_text("the lay up")
+
+    def test_and_one_synonyms(self):
+        assert "and one" in normalize_text("and-one!")
+        assert "and one" in normalize_text("and 1")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_text_timeline.py::TestNormalizeText -v`
+Expected: FAIL — `ModuleNotFoundError`
+
+- [ ] **Step 3: Implement normalize_text()**
+
+```python
+# api/src/services/text_timeline_service.py
+"""Text timeline construction and basketball vocabulary normalization."""
+
+import re
+from typing import Any
+
+
+# Basketball domain lexicon — maps synonyms to canonical forms
+_LEXICON = [
+    # Three-point synonyms
+    (re.compile(r'\b(?:3|three pointer|trey)\b', re.I), "three"),
+    # Dunk synonyms
+    (re.compile(r'\b(?:slam|jam)\b', re.I), "dunk"),
+    # Layup synonyms
+    (re.compile(r'\b(?:lay-up|lay up)\b', re.I), "layup"),
+    # And-one synonyms
+    (re.compile(r'\b(?:and-one|and 1)\b', re.I), "and one"),
+]
+
+
+def normalize_text(raw: str) -> str:
+    """Normalize raw commentary text for downstream pattern matching.
+
+    1. Lowercase
+    2. Strip trailing punctuation (preserve apostrophes)
+    3. Apply basketball domain lexicon
+    """
+    text = raw.lower()
+    # Strip trailing punctuation but preserve apostrophes
+    text = re.sub(r'[!?.,:;]+$', '', text)
+    text = text.strip()
+    # Apply lexicon
+    for pattern, replacement in _LEXICON:
+        text = pattern.sub(replacement, text)
+    return text
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `uv run pytest tests/test_text_timeline.py::TestNormalizeText -v`
+Expected: ALL PASSED
+
+- [ ] **Step 5: Write failing tests for build_timeline()**
+
+```python
+# tests/test_text_timeline.py (append)
+import json
+
+
+class TestBuildTimeline:
+    def test_converts_whisper_segments(self):
+        transcript = {
+            "language": "en",
+            "text": "Curry for three! He knocks it down!",
+            "segments": [
+                {"id": 0, "start": 12.5, "end": 15.2, "text": "Curry for three!"},
+                {"id": 1, "start": 15.2, "end": 17.8, "text": "He knocks it down!"},
+            ],
+        }
+        result = build_timeline(transcript, source="caption", lexicon_version="v0.1")
+        assert result["source"] == "caption"
+        assert result["lexicon_version"] == "v0.1"
+        assert len(result["segments"]) == 2
+
+        seg0 = result["segments"][0]
+        assert seg0["segment_id"] == 0
+        assert seg0["t_start"] == 12.5
+        assert seg0["t_end"] == 15.2
+        assert seg0["raw_text"] == "Curry for three!"
+        assert seg0["normalized_text"] == "curry for three"
+        assert seg0["source"] == "caption"
+        assert seg0["asr_confidence"] is None
+
+    def test_stt_segments_have_confidence(self):
+        transcript = {
+            "language": "en",
+            "text": "for three",
+            "segments": [
+                {"id": 0, "start": 1.0, "end": 2.0, "text": "for three", "avg_logprob": -0.3},
+            ],
+        }
+        result = build_timeline(transcript, source="stt", lexicon_version="v0.1")
+        seg = result["segments"][0]
+        assert seg["source"] == "stt"
+        assert seg["asr_confidence"] is not None
+
+    def test_empty_segments_filtered(self):
+        transcript = {
+            "language": "en",
+            "text": "",
+            "segments": [
+                {"id": 0, "start": 0.0, "end": 1.0, "text": ""},
+                {"id": 1, "start": 1.0, "end": 2.0, "text": "  "},
+                {"id": 2, "start": 2.0, "end": 3.0, "text": "real text"},
+            ],
+        }
+        result = build_timeline(transcript, source="caption", lexicon_version="v0.1")
+        assert len(result["segments"]) == 1
+        assert result["segments"][0]["raw_text"] == "real text"
+
+    def test_meta_included(self):
+        transcript = {"language": "en", "text": "x", "segments": [{"id": 0, "start": 0, "end": 1, "text": "x"}]}
+        result = build_timeline(transcript, source="caption", lexicon_version="v0.1")
+        assert "_meta" in result
+        assert result["_meta"]["stage"] == "text_timeline"
+```
+
+- [ ] **Step 6: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_text_timeline.py::TestBuildTimeline -v`
+Expected: FAIL — `ImportError: cannot import name 'build_timeline'`
+
+- [ ] **Step 7: Implement build_timeline()**
+
+```python
+# api/src/services/text_timeline_service.py (append)
+import math
+from datetime import datetime, timezone
+
+
+def build_timeline(
+    transcript: dict,
+    *,
+    source: str,
+    lexicon_version: str,
+    stt_model_dir: str = "whisper",
+) -> dict:
+    """Transform a Whisper-format transcript into a text timeline artifact.
+
+    Args:
+        transcript: Whisper-compatible dict with 'segments' list
+        source: "caption" or "stt"
+        lexicon_version: version of normalization rules applied
+        stt_model_dir: upstream transcription model directory
+    """
+    from api.src.core.artifacts import config_key
+
+    cfg_params = {"stt_model_dir": stt_model_dir, "source_type": source, "lexicon_version": lexicon_version}
+    cfg_key = config_key(cfg_params)
+
+    segments = []
+    for seg in transcript.get("segments", []):
+        raw = seg.get("text", "").strip()
+        if not raw:
+            continue
+
+        asr_confidence = None
+        if source == "stt" and "avg_logprob" in seg:
+            # Convert log probability to 0-1 confidence
+            asr_confidence = round(math.exp(seg["avg_logprob"]), 4)
+
+        segments.append({
+            "segment_id": seg.get("id", len(segments)),
+            "t_start": seg.get("start", 0),
+            "t_end": seg.get("end", 0),
+            "raw_text": raw,
+            "normalized_text": normalize_text(raw),
+            "source": source,
+            "asr_confidence": asr_confidence,
+        })
+
+    return {
+        "_meta": {
+            "stage": "text_timeline",
+            "config_key": cfg_key,
+            "upstream": {"transcription": stt_model_dir},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "source": source,
+        "lexicon_version": lexicon_version,
+        "segments": segments,
+    }
+```
+
+- [ ] **Step 8: Run all timeline tests**
+
+Run: `uv run pytest tests/test_text_timeline.py -v`
+Expected: ALL PASSED
+
+- [ ] **Step 9: Write captions schemas**
+
+```python
+# api/src/schemas/captions.py
+"""Pydantic request/response models for the captions timeline endpoint."""
+
+from pydantic import BaseModel
+
+
+class TextTimelineRequest(BaseModel):
+    stt_model_dir: str = "whisper"
+    lexicon_version: str = "v0.1"
+
+
+class TextTimelineResponse(BaseModel):
+    video_id: str
+    config_key: str
+    n_segments: int
+    source: str
+    skipped: bool = False
+```
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add api/src/schemas/captions.py api/src/services/text_timeline_service.py tests/test_text_timeline.py
+git commit -m "feat: add text timeline service with basketball lexicon normalization"
+```
+
+---
+
+### Task 7: Captions timeline router
+
+**Files:**
+- Create: `api/src/routers/captions.py`
+- Modify: `api/src/main.py`
+- Test: `tests/test_text_timeline.py` (extend)
+
+- [ ] **Step 1: Write failing tests for the captions router**
+
+```python
+# tests/test_text_timeline.py (append)
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def app():
+    from api.src.main import create_app
+    return create_app()
+
+
+@pytest.fixture
+def client(app):
+    return TestClient(app)
+
+
+class TestCaptionsRouter:
+    def test_timeline_endpoint_registered(self, app):
+        paths = list(app.openapi()["paths"].keys())
+        assert any("/api/captions/timeline" in p for p in paths)
+
+    def test_timeline_unknown_video_returns_404(self, client):
+        resp = client.post("/api/captions/timeline/nonexistent")
+        assert resp.status_code == 404
+
+    def test_timeline_missing_transcription_returns_409(self, client):
+        """Timeline requires transcription to exist first."""
+        resp = client.post("/api/captions/timeline/LPDnemFoqVk")
+        assert resp.status_code == 409
+
+    def test_timeline_skip_on_exists(self, client, tmp_path, monkeypatch):
+        """If timeline output already exists, return skipped=True."""
+        import json
+        from api.src.core import config as cfg_mod
+        from api.src.core.artifacts import artifact_path, config_key
+        from api.src.services.text_timeline_service import build_timeline
+
+        monkeypatch.setattr(cfg_mod.settings, "data_dir", tmp_path)
+
+        # Create fake transcription so the 409 check passes
+        trans_dir = tmp_path / "transcriptions" / "whisper"
+        trans_dir.mkdir(parents=True)
+        stem = "Warriors & Lakers Instant Classic - 2021 Play-In Tournament"
+        (trans_dir / f"{stem}.json").write_text(json.dumps({
+            "language": "en", "text": "x", "segments": [{"id": 0, "start": 0, "end": 1, "text": "x"}]
+        }))
+
+        # Create fake timeline output
+        cfg_params = {"stt_model_dir": "whisper", "source_type": "caption", "lexicon_version": "v0.1"}
+        cfg_key = config_key(cfg_params)
+        out = artifact_path(tmp_path, "text_timeline", cfg_key, stem)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"source": "caption", "segments": [{"segment_id": 0}], "_meta": {"config_key": cfg_key}}))
+
+        resp = client.post("/api/captions/timeline/LPDnemFoqVk")
+        assert resp.status_code == 200
+        assert resp.json()["skipped"] is True
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/test_text_timeline.py::TestCaptionsRouter -v`
+Expected: FAIL — endpoint not registered
+
+- [ ] **Step 3: Implement captions router**
+
+```python
+# api/src/routers/captions.py
+"""Captions timeline router — text timeline for dataset builder."""
+
+import json
+import logging
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+
+from api.src.core.artifacts import (
+    artifact_path,
+    atomic_write_json,
+    check_stale,
+    config_key,
+    read_status,
+    status_path_for,
+    write_status,
+)
+from api.src.core.config import settings
+from api.src.core.video_registry import resolve_stem
+from api.src.schemas.captions import TextTimelineRequest, TextTimelineResponse
+from api.src.services.text_timeline_service import build_timeline
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/captions", tags=["captions"])
+
+
+@router.post("/timeline/{video_id}", response_model=TextTimelineResponse)
+async def timeline(video_id: str, req: TextTimelineRequest | None = None):
+    """Build a normalized text timeline from existing transcription output."""
+    req = req or TextTimelineRequest()
+    stem = resolve_stem(video_id)
+    if stem is None:
+        raise HTTPException(404, f"Video '{video_id}' not in registry")
+
+    # Check transcription exists
+    transcription_path = settings.data_dir / "transcriptions" / req.stt_model_dir / f"{stem}.json"
+    if not transcription_path.exists():
+        raise HTTPException(
+            409,
+            detail={"detail": "Transcription must be completed before building timeline", "missing": ["transcribe"]},
+        )
+
+    # Determine source type
+    yt_caption_path = settings.youtube_captions_dir / f"{stem}.txt"
+    source = "caption" if yt_caption_path.exists() else "stt"
+
+    cfg_params = {"stt_model_dir": req.stt_model_dir, "source_type": source, "lexicon_version": req.lexicon_version}
+    cfg_key = config_key(cfg_params)
+    out = artifact_path(settings.data_dir, "text_timeline", cfg_key, stem)
+    sidecar = status_path_for(out)
+
+    # Skip if exists
+    if out.exists():
+        data = json.loads(out.read_text())
+        return TextTimelineResponse(
+            video_id=video_id,
+            config_key=cfg_key,
+            n_segments=len(data.get("segments", [])),
+            source=data.get("source", source),
+            skipped=True,
+        )
+
+    # Check not already running (with crash recovery)
+    current = check_stale(sidecar, timeout_s=60.0)
+    if current["status"] == "active":
+        raise HTTPException(409, detail={"detail": "Timeline is already being built"})
+
+    write_status(sidecar, "active")
+    try:
+        transcript = json.loads(transcription_path.read_text())
+        result = build_timeline(
+            transcript,
+            source=source,
+            lexicon_version=req.lexicon_version,
+            stt_model_dir=req.stt_model_dir,
+        )
+
+        atomic_write_json(out, result)
+        write_status(sidecar, "complete", config_key=cfg_key)
+
+        return TextTimelineResponse(
+            video_id=video_id,
+            config_key=cfg_key,
+            n_segments=len(result["segments"]),
+            source=source,
+        )
+    except Exception as exc:
+        write_status(sidecar, "error", error=str(exc))
+        raise HTTPException(500, detail=f"Timeline construction failed: {exc}")
+```
+
+- [ ] **Step 4: Register captions router in main.py**
+
+Add to `api/src/main.py` in `create_app()` after the vision router registration:
+
+```python
+    from api.src.routers.captions import router as captions_router
+    app.include_router(captions_router)
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `uv run pytest tests/test_text_timeline.py -v`
+Expected: ALL PASSED
+
+- [ ] **Step 6: Run existing tests for no regressions**
+
+Run: `uv run pytest tests/test_api_scaffold.py -v`
+Expected: ALL PASSED
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add api/src/routers/captions.py api/src/main.py tests/test_text_timeline.py
+git commit -m "feat: add captions timeline router with skip-on-exists and 409 deps"
+```
+
+---
+
+### Task 8: inference-roboflow GPU service
 
 **Files:**
 - Create: `inference_roboflow/__init__.py`
@@ -1654,7 +2119,7 @@ git commit -m "feat: add inference-roboflow GPU service (detection, keypoints, O
 
 ---
 
-### Task 7: inference-vision GPU service
+### Task 9: inference-vision GPU service
 
 **Files:**
 - Create: `inference_vision/__init__.py`
@@ -1998,7 +2463,7 @@ git commit -m "feat: add inference-vision GPU service (SAM2 tracking, team class
 
 ---
 
-### Task 8: Dockerfiles
+### Task 10: Dockerfiles
 
 **Files:**
 - Replace: `Dockerfile` (CPU API)
@@ -2133,7 +2598,7 @@ git commit -m "feat: add Dockerfiles — CPU API, inference-roboflow, inference-
 
 ---
 
-### Task 9: Docker Compose
+### Task 11: Docker Compose
 
 **Files:**
 - Replace: `docker-compose.yml`
@@ -2273,7 +2738,7 @@ git commit -m "feat: docker-compose with CPU API + 2 GPU inference + notebook"
 
 ---
 
-### Task 10: Integration smoke test
+### Task 12: Integration smoke test
 
 - [ ] **Step 1: Run all existing tests to verify no regressions**
 
@@ -2284,8 +2749,8 @@ Expected: All previously passing tests still pass. New tests pass.
 
 - [ ] **Step 2: Verify API starts and vision routes are registered**
 
-Run: `uv run python -c "from api.src.main import create_app; app = create_app(); print([r.path for r in app.routes if '/vision/' in getattr(r, 'path', '')])"`
-Expected: Lists all 7 vision endpoint paths
+Run: `uv run python -c "from api.src.main import create_app; app = create_app(); paths = [r.path for r in app.routes if '/vision/' in getattr(r, 'path', '') or '/captions/' in getattr(r, 'path', '')]; print(paths)"`
+Expected: Lists all 7 vision endpoint paths + 1 captions timeline path
 
 - [ ] **Step 3: Commit any fixes**
 
