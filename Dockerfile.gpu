@@ -10,7 +10,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 RUN mkdir -p /etc/pip && pip list --format=freeze > /etc/pip/constraint.txt
 
 # Install SAM2 from Meta's official package
-RUN pip install --no-cache-dir SAM-2
+RUN pip install --no-cache-dir sam2
 
 WORKDIR /app
 
