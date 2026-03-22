@@ -36,6 +36,7 @@ class SAM2Tracker:
             video_path=video_path,
             offload_video_to_cpu=True,
             offload_state_to_cpu=True,
+            async_loading_frames=True,
         )
 
     def prompt_frame(self, frame_idx: int, detections: sv.Detections) -> None:
