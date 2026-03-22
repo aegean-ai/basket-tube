@@ -34,14 +34,14 @@ Sidebar + Video + Tabbed Panels:
 ```
 
 - **Left sidebar:** video list from `video_registry.yml`, "Analyze" button, settings gear icon
-- **Top:** large video player. Shows source video initially, annotated render when available.
+- **Top:** large video player. Shows source video. (Annotated render is a future feature — the render stage is a 501 stub.)
 - **Bottom:** tabbed panel with 4 tabs
 
 ## Tabs
 
 ### Pipeline Tab
 
-Stage progress table with 7 rows:
+Stage progress table with 8 rows:
 
 | Stage | Description | Status | Duration | Actions |
 |-------|-------------|--------|----------|---------|
@@ -60,17 +60,33 @@ Each completed stage shows a "Re-run" button. Re-running a stage invalidates all
 
 ### Players Tab
 
-Roster table populated from OCR + team classification results:
+Roster table populated from OCR + team classification + track artifacts:
 
-| # | Player | Team | |
-|---|--------|------|-|
-| 30 | Stephen Curry | Warriors | → (click seeks video) |
-| 23 | LeBron James | Lakers | → |
+| # | Player | Team | First Seen | |
+|---|--------|------|------------|--|
+| 30 | Stephen Curry | Warriors | 0:04 | → (click seeks video) |
+| 23 | LeBron James | Lakers | 0:02 | → |
 
-- Rows colored by team (using palette from classify-teams output)
-- Click a row → video player seeks to a frame where that player is visible
+- Rows colored by team (using palette from classify-teams artifact)
+- Click a row → video player seeks to that player's `first_frame_time`
 - Player names resolved from roster mapping in settings (jersey# → name)
 - If OCR hasn't run yet, table shows "Run pipeline to detect players"
+
+**Data assembly:** The frontend fetches three artifacts to build the table:
+
+1. **OCR artifact** (`jerseys/{config}/{stem}.json`): `players` map of `tracker_id → jersey_number`
+2. **Teams artifact** (`teams/{config}/{stem}.json`): `assignments` array of `{frame_index, detection_index, team_id}` + `palette`
+3. **Tracks artifact** (`tracks/{config}/{stem}.json`): `frames` array with per-frame `tracker_ids` and `xyxy` boxes
+
+The frontend joins these: for each `tracker_id` in the OCR players map, find its team from the assignments (via the track→detection index mapping), and find its first frame appearance from the tracks data. The seek target is `first_frame_index / fps` (fps from the detection artifact's `video_info`).
+
+**Artifact retrieval:** A new API endpoint serves artifact JSON:
+
+```
+GET /api/vision/artifacts/{stage}/{video_id}?config_key={key}
+```
+
+Returns the raw JSON artifact file for client-side assembly. This avoids baking presentation logic into the API — the frontend reads the structured data and builds the table itself.
 
 ### Court Tab
 
@@ -124,10 +140,18 @@ When calling `track`, the hook passes `det_config_key: config_keys.detect`. When
 
 ### Stage Re-run
 
-Each completed stage has a re-run button. Re-running a stage:
-1. Clears the cached output (the API produces a new config_key if params changed)
-2. Invalidates downstream stages: re-running `detect` clears track, teams, OCR, court-map
-3. Re-executes the stage and all downstream stages sequentially
+Each completed stage has a "Re-run" button. Re-running works through the existing config-key mechanism — no backend invalidation endpoint is needed:
+
+1. **If parameters changed** (e.g., user adjusts confidence in Advanced Settings): the new parameters produce a new config key → the API treats it as a fresh run and processes from scratch. Old artifacts remain on disk under their config key.
+
+2. **If parameters unchanged** (user clicks Re-run without changing settings): the API returns `skipped: true` because the output already exists. To force reprocessing with identical parameters, the frontend must delete the cached artifact first. This is not exposed in the UI for now — re-run is only useful after changing settings.
+
+3. **Downstream invalidation is frontend-only**: the pipeline hook clears `config_keys` and `stages` state for downstream stages in the reducer. It then re-executes the stage and all downstream stages sequentially with the new upstream config keys. The API naturally produces new outputs because the upstream config key changed.
+
+Example: user changes detection confidence from 0.4 to 0.3:
+- Detect produces `c-7e19d04` (new config key, different from old `c-a3f82b1`)
+- Track receives `det_config_key: "c-7e19d04"` → new track config key → fresh processing
+- All downstream stages cascade with new keys
 
 ### Dependency Map
 
@@ -255,13 +279,14 @@ ocrJerseys(videoId: string, req: OCRRequest): Promise<OCRResponse>
 mapCourt(videoId: string, req: CourtMapRequest): Promise<CourtMapResponse>
 renderVideo(videoId: string, req: RenderRequest): Promise<RenderResponse>
 getPipelineStatus(videoId: string): Promise<PipelineStatusResponse>
+getArtifact(stage: string, videoId: string, configKey: string): Promise<any>  // GET /api/vision/artifacts/{stage}/{id}?config_key={key}
 
 // New — captions
 buildTimeline(videoId: string, req?: TextTimelineRequest): Promise<TextTimelineResponse>
 
 // URL helpers
-getVideoUrl(videoId: string): string                    // original video
-getAnnotatedVideoUrl(videoId: string, configKey: string): string  // rendered overlay
+getVideoUrl(videoId: string): string                    // original source video
+// getAnnotatedVideoUrl() — deferred until render stage is implemented
 ```
 
 ## Component Inventory
@@ -292,7 +317,7 @@ getAnnotatedVideoUrl(videoId: string, configKey: string): string  // rendered ov
 | `hooks/use-pipeline.ts` | New stage sequence, config key chaining, re-run logic |
 | `lib/types.ts` | All new types (see above) |
 | `lib/api.ts` | New API client (see above) |
-| `video-canvas.tsx` | Show annotated render when available, source video otherwise |
+| `video-canvas.tsx` | Full rewrite — remove variant/subtitle logic, show source video only |
 | `app/layout.tsx` | Update metadata, swap settings provider |
 
 ### Create New
@@ -347,5 +372,6 @@ useAnalysisSettings hook
 - Use shadcn MCP (https://ui.shadcn.com/docs/mcp) during implementation for component code
 - The existing dark theme and color palette are kept — only the golden accent (#f0c040) and component content change
 - `page.tsx` server component pattern stays the same (fetch videos, pass to client layout)
-- `video-canvas.tsx` needs minor adaptation: show annotated render video when available, source video otherwise
+- `video-canvas.tsx` is a full rewrite (current component is built around dubbed variants and subtitle switching)
+- Video player shows source video only — annotated render deferred until render stage is implemented
 - The `public/demo/` directory with foreign-whispers demo data can be deleted
