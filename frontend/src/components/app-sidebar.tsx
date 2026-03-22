@@ -1,13 +1,7 @@
 "use client";
 
 import * as React from "react";
-import {
-  FilmIcon,
-  VideoIcon,
-  PlayIcon,
-} from "lucide-react";
-import { SettingsDialog } from "./settings-dialog";
-import { Badge } from "@/components/ui/badge";
+import { CircleDot, VideoIcon, PlayIcon, SettingsIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -18,45 +12,28 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  SidebarSeparator,
 } from "@/components/ui/sidebar";
-import type { Video, PipelineState, VideoVariant } from "@/lib/types";
-
-function getVideoStatus(
-  video: Video,
-  pipelineState: PipelineState,
-  variants: VideoVariant[]
-): { label: string; variant: "default" | "secondary" | "destructive" | "outline" } {
-  const videoVariants = variants.filter((v) => v.sourceVideoId === video.id);
-  const hasComplete = videoVariants.some((v) => v.status === "complete");
-  const hasProcessing = videoVariants.some((v) => v.status === "processing");
-
-  if (pipelineState.videoId === video.id && pipelineState.status === "running") {
-    return { label: "Running", variant: "secondary" };
-  }
-  if (hasProcessing) return { label: "Running", variant: "secondary" };
-  if (hasComplete) return { label: "Done", variant: "default" };
-  return { label: "New", variant: "outline" };
-}
+import type { Video } from "@/lib/types";
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   videos: Video[];
-  selectedVideoId: string | null;
-  onSelectVideo: (videoId: string) => void;
-  pipelineState: PipelineState;
-  onStartPipeline: () => void;
+  selectedVideoId?: string;
+  onVideoSelect: (id: string) => void;
+  onAnalyze: () => void;
+  isRunning: boolean;
+  onOpenSettings?: () => void;
 }
 
 export function AppSidebar({
   videos,
   selectedVideoId,
-  onSelectVideo,
-  pipelineState,
-  onStartPipeline,
+  onVideoSelect,
+  onAnalyze,
+  isRunning,
+  onOpenSettings,
   ...props
 }: AppSidebarProps) {
   return (
@@ -66,11 +43,11 @@ export function AppSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" render={<div />}>
               <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                <FilmIcon className="size-4" />
+                <CircleDot className="size-4" />
               </div>
               <div className="flex flex-col gap-0.5 leading-none">
-                <span className="font-semibold">Foreign Whispers</span>
-                <span className="text-xs">Dubbing Studio</span>
+                <span className="font-semibold">BasketTube</span>
+                <span className="text-xs text-muted-foreground">aegean.ai</span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -78,20 +55,17 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
-        {/* Video Library */}
         <SidebarGroup>
           <SidebarGroupLabel>Video Library</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {videos.map((video) => {
                 const isActive = video.id === selectedVideoId;
-                const status = getVideoStatus(video, pipelineState, pipelineState.variants);
-
                 return (
                   <SidebarMenuItem key={video.id}>
                     <SidebarMenuButton
                       isActive={isActive}
-                      onClick={() => onSelectVideo(video.id)}
+                      onClick={() => onVideoSelect(video.id)}
                       tooltip={video.title}
                       className={`h-auto py-1.5 ${isActive ? "border-l-2 border-primary bg-sidebar-accent/80 pl-1.5" : ""}`}
                     >
@@ -101,34 +75,35 @@ export function AppSidebar({
                         <span className="text-[10px] text-muted-foreground font-mono">{video.id}</span>
                       </div>
                     </SidebarMenuButton>
-                    <SidebarMenuBadge>
-                      <Badge variant={status.variant} className="text-[9px] px-1 py-0 leading-tight">
-                        {status.label}
-                      </Badge>
-                    </SidebarMenuBadge>
                   </SidebarMenuItem>
                 );
               })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-
       </SidebarContent>
 
       <SidebarFooter>
         <div className="flex gap-2">
           <Button
             className="flex-1"
-            onClick={onStartPipeline}
-            disabled={pipelineState.status === "running"}
+            onClick={onAnalyze}
+            disabled={isRunning}
           >
             <PlayIcon className="size-3.5 mr-1.5" />
-            {pipelineState.status === "running" ? "Processing..." : "Start Pipeline"}
+            {isRunning ? "Analyzing..." : "Analyze"}
           </Button>
-          <SettingsDialog />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={onOpenSettings}
+            aria-label="Open settings"
+          >
+            <SettingsIcon className="size-4" />
+          </Button>
         </div>
         <div className="text-center text-[10px] text-muted-foreground/60 pb-1">
-          Aegean AI Inc.
+          aegean.ai
         </div>
       </SidebarFooter>
 
