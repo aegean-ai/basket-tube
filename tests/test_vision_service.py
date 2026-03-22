@@ -8,8 +8,7 @@ from api.src.services.vision_service import VisionService
 @pytest.fixture
 def service():
     return VisionService(
-        roboflow_url="http://localhost:8091",
-        vision_url="http://localhost:8092",
+        gpu_url="http://localhost:8090",
         timeout=10.0,
     )
 

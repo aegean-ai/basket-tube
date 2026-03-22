@@ -5,7 +5,7 @@ services:
     profiles: [nvidia, cpu]
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.api
       args:
         USER_UID: "${UID:-1000}"
         USER_GID: "${GID:-1000}"
@@ -13,51 +13,26 @@ services:
     network_mode: host
     command: ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      - FW_INFERENCE_ROBOFLOW_URL=http://localhost:8091
-      - FW_INFERENCE_VISION_URL=http://localhost:8092
+      - FW_INFERENCE_GPU_URL=http://localhost:8090
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
       - ./api:/app/api
     # Binds to :8080
 
-  # ── inference-roboflow (GPU) — detection, keypoints, OCR ─────────
-  inference-roboflow:
-    container_name: basket-tube-roboflow
+  # ── GPU inference (all vision models) ────────────────────────────
+  inference:
+    container_name: basket-tube-inference
     profiles: [nvidia]
     build:
       context: .
-      dockerfile: Dockerfile.roboflow
+      dockerfile: Dockerfile.gpu
     restart: unless-stopped
     network_mode: host
     shm_size: "8gb"
     environment:
       - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
       - INFERENCE_MODE=${INFERENCE_MODE:-local}
-      - BT_DATA_DIR=/app/pipeline_data/api
-    volumes:
-      - ./pipeline_data:/app/pipeline_data
-      - ./video_registry.yml:/app/video_registry.yml:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # Binds to :8091
-
-  # ── inference-vision (GPU) — SAM2 tracking, team classification ──
-  inference-vision:
-    container_name: basket-tube-vision
-    profiles: [nvidia]
-    build:
-      context: .
-      dockerfile: Dockerfile.vision
-    restart: unless-stopped
-    network_mode: host
-    shm_size: "8gb"
-    environment:
       - SAM2_REPO=/opt/segment-anything-2-real-time
       - HF_TOKEN=${HF_TOKEN:-}
       - BT_DATA_DIR=/app/pipeline_data/api
@@ -71,7 +46,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # Binds to :8092
+    # Binds to :8090
 
   # ── Notebook (Jupyter + GPU) ─────────────────────────────────────
   notebook:
@@ -79,7 +54,7 @@ services:
     profiles: [nvidia]
     build:
       context: .
-      dockerfile: Dockerfile.vision
+      dockerfile: Dockerfile.gpu
     restart: unless-stopped
     network_mode: host
     shm_size: "8gb"

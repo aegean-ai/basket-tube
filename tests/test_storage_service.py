@@ -174,7 +174,7 @@ class TestFactory:
 
         with patch("api.src.services.storage_service.settings") as mock_settings:
             mock_settings.s3_bucket = ""
-            mock_settings.ui_dir = "/tmp/ui"
+            mock_settings.data_dir = "/tmp/data"
 
             backend = get_storage_backend()
 
