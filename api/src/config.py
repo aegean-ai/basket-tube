@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     def analysis_dir(self) -> Path:
         return self.data_dir / "analysis"
 
+    @property
+    def settings_dir(self) -> Path:
+        return self.data_dir / "settings"
+
     # GPU inference service URL
     inference_gpu_url: str = "http://localhost:8090"
 
