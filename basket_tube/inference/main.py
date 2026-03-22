@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="basket-tube-inference")
 
 DATA_DIR = Path(os.environ.get("BT_DATA_DIR", "/app/pipeline_data/api"))
-SAM2_REPO = os.environ.get("SAM2_REPO", "/opt/segment-anything-2-real-time")
 
 # Share core utilities with CPU API
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -286,64 +285,33 @@ async def track(req: InferenceRequest):
 
         video_path = DATA_DIR / "videos" / f"{stem}.mp4"
 
-        sys.path.insert(0, SAM2_REPO)
-        from sam2.build_sam import build_sam2_camera_predictor
-        checkpoint = os.path.join(SAM2_REPO, "checkpoints", "sam2.1_hiera_large.pt")
-        sam2_config = "configs/sam2.1/sam2.1_hiera_l.yaml"
+        from basket_tube.inference.vision.tracker import build_tracker, SAM2Tracker
 
-        old_cwd = os.getcwd()
-        os.chdir(SAM2_REPO)
-        predictor = build_sam2_camera_predictor(sam2_config, checkpoint)
-        os.chdir(old_cwd)
-
-        from basket_tube.inference.vision.tracker import SAM2Tracker
+        predictor = build_tracker(model_cfg="sam2.1_hiera_l")
         tracker = SAM2Tracker(predictor)
 
-        frame_generator = sv.get_video_frames_generator(str(video_path))
-        max_frames = req.params.get("max_frames")
+        # Initialize tracking from video file
+        tracker.init_video(str(video_path))
 
-        frames_data = []
-        all_tracker_ids = set()
+        # Prompt first frame with player detections
+        first_frame = det_data["frames"][0]
+        xyxy = np.array(first_frame["xyxy"])
+        class_ids = np.array(first_frame["class_id"])
+        player_mask = np.isin(class_ids, PLAYER_CLASS_IDS)
 
-        for idx, frame in enumerate(frame_generator):
-            if max_frames and idx >= max_frames:
-                break
+        if player_mask.any():
+            player_xyxy = xyxy[player_mask]
+            initial = sv.Detections(xyxy=player_xyxy, class_id=class_ids[player_mask])
+            initial.tracker_id = np.arange(1, len(initial) + 1)
+            tracker.prompt_frame(frame_idx=0, detections=initial)
 
-            if idx == 0:
-                first_frame = det_data["frames"][0]
-                xyxy = np.array(first_frame["xyxy"])
-                class_ids = np.array(first_frame["class_id"])
-                player_mask = np.isin(class_ids, PLAYER_CLASS_IDS)
-
-                if player_mask.any():
-                    player_xyxy = xyxy[player_mask]
-                    initial = sv.Detections(xyxy=player_xyxy, class_id=class_ids[player_mask])
-                    initial.tracker_id = np.arange(1, len(initial) + 1)
-                    tracker.prompt_first_frame(frame, initial)
-
-                    frames_data.append({
-                        "frame_index": idx,
-                        "tracker_ids": initial.tracker_id.tolist(),
-                        "xyxy": initial.xyxy.tolist(),
-                        "mask_rle": [],
-                    })
-                    all_tracker_ids.update(initial.tracker_id.tolist())
-                    continue
-
-            tracked = tracker.track(frame)
-            frames_data.append({
-                "frame_index": idx,
-                "tracker_ids": tracked.tracker_id.tolist() if tracked.tracker_id is not None else [],
-                "xyxy": tracked.xyxy.tolist(),
-                "mask_rle": [],
-            })
-            if tracked.tracker_id is not None:
-                all_tracker_ids.update(tracked.tracker_id.tolist())
+        # Propagate through all frames
+        frames_data, n_tracks = tracker.propagate()
 
         output = {
             "_meta": {"stage": "tracks", "config_key": cfg_key, "upstream": {"detections": det_config_key}, "created_at": datetime.now(timezone.utc).isoformat()},
             "n_frames": len(frames_data),
-            "n_tracks": len(all_tracker_ids),
+            "n_tracks": n_tracks,
             "frames": frames_data,
         }
 
