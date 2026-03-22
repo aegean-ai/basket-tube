@@ -61,8 +61,7 @@ STAGE_NAMES = ["detections", "tracks", "teams", "jerseys", "court", "renders"]
 def _get_vision_service() -> VisionService:
     """Create a VisionService from application settings."""
     return VisionService(
-        roboflow_url=settings.inference_roboflow_url,
-        vision_url=settings.inference_vision_url,
+        gpu_url=settings.inference_gpu_url,
     )
 
 

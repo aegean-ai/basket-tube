@@ -1,4 +1,4 @@
-"""Foreign Whispers FastAPI application."""
+"""BasketTube FastAPI application."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -13,13 +13,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lazy model loading — models are loaded on first use, not at startup.
-
-    This avoids blocking startup in Docker Compose where Whisper and TTS
-    inference may be handled by separate containers (speaches, Chatterbox).
-    """
+    """Application lifespan — lazy model loading on first use."""
     app.state._whisper_model = None
-    app.state._tts_model = None
     logger.info("Application ready (models will load on first use).")
 
     # Configure Logfire if a write token is available
@@ -28,7 +23,7 @@ async def lifespan(app: FastAPI):
             import logfire
             logfire.configure(
                 write_token=settings.logfire_write_token,
-                service_name="foreign-whispers",
+                service_name="basket-tube",
             )
             logfire.instrument_fastapi(app)
             logger.info("Logfire tracing enabled.")
@@ -37,11 +32,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
     if app.state._whisper_model is not None:
         del app.state._whisper_model
-    if app.state._tts_model is not None:
-        del app.state._tts_model
     logger.info("Models unloaded.")
 
 
@@ -53,16 +45,6 @@ def get_whisper_model(app):
         app.state._whisper_model = whisper.load_model(settings.whisper_model)
         logger.info("Whisper model loaded.")
     return app.state._whisper_model
-
-
-def get_tts_model(app):
-    """Lazy-load TTS model on first use."""
-    if app.state._tts_model is None:
-        logger.info("Loading TTS model (%s)...", settings.tts_model_name)
-        from TTS.api import TTS
-        app.state._tts_model = TTS(model_name=settings.tts_model_name, progress_bar=False)
-        logger.info("TTS model loaded.")
-    return app.state._tts_model
 
 
 def create_app() -> FastAPI:
@@ -83,20 +65,12 @@ def create_app() -> FastAPI:
 
     from api.src.routers.download import router as download_router
     from api.src.routers.transcribe import router as transcribe_router
-    from api.src.routers.translate import router as translate_router
-    from api.src.routers.tts import router as tts_router
-    from api.src.routers.stitch import router as stitch_router
+    from api.src.routers.vision import router as vision_router
+    from api.src.routers.captions import router as captions_router
 
     app.include_router(download_router)
     app.include_router(transcribe_router)
-    app.include_router(translate_router)
-    app.include_router(tts_router)
-    app.include_router(stitch_router)
-    from api.src.routers.eval import router as eval_router
-    app.include_router(eval_router)
-    from api.src.routers.vision import router as vision_router
     app.include_router(vision_router)
-    from api.src.routers.captions import router as captions_router
     app.include_router(captions_router)
 
     @app.get("/healthz")

@@ -21,26 +21,26 @@ RUN cd /opt/segment-anything-2-real-time/checkpoints \
 
 WORKDIR /app
 
-# NOTE: Only copying shared utilities from api/src/core/ — see Dockerfile.roboflow note.
+# Shared utilities from api/src/core/ (artifacts, video_registry)
+# config.py is NOT copied — GPU service uses BT_ env vars, not FW_ settings.
 COPY api/src/core/artifacts.py api/src/core/
 COPY api/src/core/video_registry.py api/src/core/
 COPY api/src/core/__init__.py api/src/core/
 COPY api/src/__init__.py api/src/
 COPY api/__init__.py api/
-COPY basket_tube/__init__.py basket_tube/
-COPY basket_tube/inference/__init__.py basket_tube/inference/
-COPY basket_tube/inference/vision/ basket_tube/inference/vision/
+COPY basket_tube/ basket_tube/
 COPY pyproject.toml ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system --constraint /etc/pip/constraint.txt \
-    "supervision==0.27.0rc4" \
+    "inference-gpu" "supervision==0.27.0rc4" \
     "sports @ git+https://github.com/roboflow/sports.git@feat/basketball" \
-    opencv-python-headless "numpy<2" tqdm \
+    transformers num2words opencv-python-headless "numpy<2" tqdm \
     fastapi uvicorn pyyaml \
     jupyterlab ipywidgets
 
 ENV SAM2_REPO=/opt/segment-anything-2-real-time
+ENV ONNXRUNTIME_EXECUTION_PROVIDERS="[CUDAExecutionProvider]"
 
-EXPOSE 8092
-CMD ["uvicorn", "basket_tube.inference.vision.main:app", "--host", "0.0.0.0", "--port", "8092"]
+EXPOSE 8090
+CMD ["uvicorn", "basket_tube.inference.main:app", "--host", "0.0.0.0", "--port", "8090"]

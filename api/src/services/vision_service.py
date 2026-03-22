@@ -1,26 +1,24 @@
-"""Async HTTP client for GPU inference services."""
+"""Async HTTP client for the GPU inference service."""
 
 import httpx
 from typing import Any
 
 
 class VisionService:
-    """Calls inference-roboflow and inference-vision GPU services over HTTP."""
+    """Calls the basket-tube GPU inference service over HTTP."""
 
     def __init__(
         self,
-        roboflow_url: str = "http://localhost:8091",
-        vision_url: str = "http://localhost:8092",
+        gpu_url: str = "http://localhost:8090",
         timeout: float = 600.0,
     ):
-        self.roboflow_url = roboflow_url.rstrip("/")
-        self.vision_url = vision_url.rstrip("/")
+        self.gpu_url = gpu_url.rstrip("/")
         self.timeout = timeout
 
-    async def _post(self, base_url: str, path: str, payload: dict) -> dict:
-        """POST JSON to a GPU service and return the response dict."""
+    async def _post(self, path: str, payload: dict) -> dict:
+        """POST JSON to the GPU service and return the response dict."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(f"{base_url}{path}", json=payload)
+            resp = await client.post(f"{self.gpu_url}{path}", json=payload)
             resp.raise_for_status()
             return resp.json()
 
@@ -38,20 +36,20 @@ class VisionService:
 
     async def detect(self, video_id: str, params: dict, **kw: Any) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.roboflow_url, "/api/detect", payload)
+        return await self._post("/api/detect", payload)
 
     async def keypoints(self, video_id: str, params: dict, **kw: Any) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.roboflow_url, "/api/keypoints", payload)
+        return await self._post("/api/keypoints", payload)
 
     async def ocr(self, video_id: str, params: dict, **kw: Any) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.roboflow_url, "/api/ocr", payload)
+        return await self._post("/api/ocr", payload)
 
     async def track(self, video_id: str, params: dict, **kw: Any) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.vision_url, "/api/track", payload)
+        return await self._post("/api/track", payload)
 
     async def classify_teams(self, video_id: str, params: dict, **kw: Any) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
-        return await self._post(self.vision_url, "/api/classify-teams", payload)
+        return await self._post("/api/classify-teams", payload)

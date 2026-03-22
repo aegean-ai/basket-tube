@@ -123,4 +123,4 @@ def get_storage_backend() -> StorageBackend:
             access_key=settings.s3_access_key,
             secret_key=settings.s3_secret_key,
         )
-    return LocalStorageBackend(base_dir=settings.ui_dir)
+    return LocalStorageBackend(base_dir=settings.data_dir)

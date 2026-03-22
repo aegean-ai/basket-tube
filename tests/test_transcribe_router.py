@@ -18,14 +18,22 @@ def ui_dir(tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch, ui_dir):
-    """Test client with models stubbed."""
+    """Test client with Whisper model stubbed."""
+    from unittest.mock import MagicMock
     monkeypatch.setattr("whisper.load_model", lambda *a, **kw: MagicMock())
-    monkeypatch.setattr("TTS.api.TTS", lambda *a, **kw: MagicMock())
 
     from api.src.core.config import settings
-
     monkeypatch.setattr(settings, "data_dir", ui_dir)
-    monkeypatch.setattr(settings, "ui_dir", ui_dir)
+
+    # Mock resolve_title to return "Test Title" for any video ID
+    monkeypatch.setattr(
+        "api.src.core.dependencies.resolve_title",
+        lambda vid: "Test Title",
+    )
+    monkeypatch.setattr(
+        "api.src.routers.transcribe.resolve_title",
+        lambda vid: "Test Title",
+    )
 
     from api.src.main import app
 
@@ -54,10 +62,13 @@ def test_transcribe_returns_segments(client, monkeypatch, ui_dir):
         lambda self_or_vid, vid_or_dir, search_dir=None: "Test Title",
     )
 
-    # Mock whisper transcribe on the model stored in app.state
+    # Set a mock Whisper model in app state (lifespan sets it to None)
     from api.src.main import app
+    from unittest.mock import MagicMock
 
-    app.state.whisper_model.transcribe = MagicMock(return_value=_make_whisper_result())
+    mock_model = MagicMock()
+    mock_model.transcribe = MagicMock(return_value=_make_whisper_result())
+    app.state._whisper_model = mock_model
 
     resp = client.post("/api/transcribe/G3Eup4mfJdA")
     assert resp.status_code == 200
@@ -78,8 +89,11 @@ def test_transcribe_saves_json(client, monkeypatch, ui_dir):
     )
 
     from api.src.main import app
+    from unittest.mock import MagicMock
 
-    app.state.whisper_model.transcribe = MagicMock(return_value=_make_whisper_result())
+    mock_model = MagicMock()
+    mock_model.transcribe = MagicMock(return_value=_make_whisper_result())
+    app.state._whisper_model = mock_model
 
     client.post("/api/transcribe/G3Eup4mfJdA")
 
@@ -101,19 +115,21 @@ def test_transcribe_skips_if_cached(client, monkeypatch, ui_dir):
     cached.write_text(json.dumps(_make_whisper_result()))
 
     from api.src.main import app
+    from unittest.mock import MagicMock
 
-    app.state.whisper_model.transcribe = MagicMock()
+    mock_model = MagicMock()
+    app.state._whisper_model = mock_model
 
     resp = client.post("/api/transcribe/G3Eup4mfJdA")
     assert resp.status_code == 200
-    app.state.whisper_model.transcribe.assert_not_called()
+    mock_model.transcribe.assert_not_called()
 
 
 def test_transcribe_video_not_found(client, monkeypatch, ui_dir):
-    """Returns 404 when video file doesn't exist."""
+    """Returns 404 when video ID is not in registry."""
     monkeypatch.setattr(
-        "api.src.services.transcription_service.TranscriptionService.title_for_video_id",
-        lambda self_or_vid, vid_or_dir, search_dir=None: None,
+        "api.src.routers.transcribe.resolve_title",
+        lambda vid: None,
     )
 
     resp = client.post("/api/transcribe/NONEXISTENT")
