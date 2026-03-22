@@ -1,7 +1,7 @@
 # BasketTube Vision Pipeline API Design
 
 **Date:** 2026-03-21
-**Status:** Approved
+**Status:** Approved (rev 2)
 
 ## Overview
 
@@ -36,6 +36,79 @@ BasketTube analyzes basketball game video through a multi-stage computer vision 
 
 A fourth container (`notebook`) reuses `Dockerfile.vision` with a JupyterLab CMD for prototyping.
 
+## Identity Model
+
+**`video_id`** is the YouTube video ID (e.g., `LPDnemFoqVk`). It is the primary key used in all API endpoints and artifact lookup.
+
+**`stem`** is the slugified title from `video_registry.yml` (e.g., `Warriors & Lakers Instant Classic - 2021 Play-In Tournament`). It is used only for human-readable filenames on disk.
+
+**Resolution:** A single shared function `resolve_stem(video_id) → stem` (in `api/src/core/video_registry.py`) performs the lookup. All services — CPU API and GPU services — use this function. GPU services receive `video_id` over HTTP and resolve to filesystem paths internally. The registry YAML is mounted read-only into all containers.
+
+**Artifact lookup:** Given a `video_id`, a stage name, and a config key, the canonical artifact path is:
+
+```
+{data_dir}/analysis/{stage}/{config_key}/{stem}.json
+```
+
+No service passes raw filesystem paths over HTTP. Instead, requests contain `video_id` and parameters; each service resolves paths locally.
+
+## Artifact Isolation & Caching
+
+Stages with overridable parameters or swappable models must isolate their outputs by configuration. A **config key** is a short deterministic hash of the parameters that affect the output. This follows the existing TTS pipeline pattern (`c-{hash}`).
+
+### Config Key Computation
+
+Each stage computes a config key from its request parameters:
+
+```python
+import hashlib, json
+
+def config_key(params: dict) -> str:
+    """Deterministic short hash of parameters that affect output."""
+    canonical = json.dumps(params, sort_keys=True, separators=(",", ":"))
+    return "c-" + hashlib.sha256(canonical.encode()).hexdigest()[:7]
+```
+
+### Directory Layout
+
+```
+pipeline_data/api/
+├── videos/{stem}.mp4                              # source video
+├── analysis/
+│   ├── detections/{config_key}/{stem}.json         # stage 1
+│   ├── tracks/{config_key}/{stem}.json             # stage 2
+│   ├── teams/{config_key}/{stem}.json              # stage 3
+│   ├── jerseys/{config_key}/{stem}.json            # stage 4
+│   ├── court/{config_key}/{stem}.json              # stage 5
+│   └── renders/{config_key}/{stem}.mp4             # stage 6
+```
+
+**Example:** Detection with `confidence=0.4, iou_threshold=0.9, model=basketball-player-detection-3-ycjdo/4` hashes to `c-a3f82b1`. Changing confidence to `0.3` produces `c-7e19d04` — a separate directory, no stale cache hit.
+
+### Skip-on-Exists
+
+If the output file exists for the given config key, the endpoint returns immediately with `skipped: true`. Changing any parameter produces a new config key and triggers reprocessing. Downstream stages that depend on a specific upstream config key must record which upstream config they consumed (stored in the output JSON metadata).
+
+### Cross-Stage Dependencies
+
+Each stage's output JSON includes a `_meta` field recording the config keys of its inputs:
+
+```json
+{
+  "_meta": {
+    "stage": "tracks",
+    "config_key": "c-b2a91e3",
+    "upstream": {
+      "detections": "c-a3f82b1"
+    },
+    "created_at": "2026-03-21T14:30:00Z"
+  },
+  "frames": [...]
+}
+```
+
+This enables invalidation: if detection is re-run with different parameters, the track stage knows its upstream changed.
+
 ## Pipeline Stages
 
 All paths below are relative to the shared `pipeline_data/` mount. The existing `data_dir` in `api/src/core/config.py` resolves to `pipeline_data/api/` — vision artifacts live under `pipeline_data/api/analysis/` to stay consistent with the existing directory structure.
@@ -45,10 +118,11 @@ All paths below are relative to the shared `pipeline_data/` mount. The existing 
 - **Endpoint (CPU API):** `POST /api/vision/detect/{video_id}`
 - **Delegates to:** `inference-roboflow POST /api/detect`
 - **Model:** `basketball-player-detection-3-ycjdo/4` (RF-DETR)
-- **Input:** `pipeline_data/api/videos/{stem}.mp4`
-- **Output:** `pipeline_data/api/analysis/detections/{stem}.json`
+- **Input:** `videos/{stem}.mp4`
+- **Output:** `analysis/detections/{config_key}/{stem}.json`
+- **Config key inputs:** `{model_id, confidence, iou_threshold}`
 - **Content:** Per-frame bounding boxes, class IDs, confidence scores
-- **Default parameters:** confidence=0.4, iou_threshold=0.9 (hardcoded defaults, overridable via request)
+- **Default parameters:** confidence=0.4, iou_threshold=0.9
 - **Class IDs:** 0=ball, 1=ball-in-basket, 2=number, 3=player, 4=player-in-possession, 5=jump-shot, 6=layup-dunk, 7=shot-block
 
 ### Stage 2: Tracking
@@ -56,8 +130,9 @@ All paths below are relative to the shared `pipeline_data/` mount. The existing 
 - **Endpoint (CPU API):** `POST /api/vision/track/{video_id}`
 - **Delegates to:** `inference-vision POST /api/track`
 - **Model:** SAM2.1 Large (`sam2.1_hiera_large.pt`)
-- **Input:** `pipeline_data/api/videos/{stem}.mp4` + `pipeline_data/api/analysis/detections/{stem}.json`
-- **Output:** `pipeline_data/api/analysis/tracks/{stem}.json`
+- **Input:** `videos/{stem}.mp4` + `analysis/detections/{det_config_key}/{stem}.json`
+- **Output:** `analysis/tracks/{config_key}/{stem}.json`
+- **Config key inputs:** `{sam2_checkpoint, det_config_key}`
 - **Content:** Per-frame masks (RLE-encoded), tracker IDs, bounding boxes
 - **Dependencies:** Stage 1
 
@@ -66,20 +141,40 @@ All paths below are relative to the shared `pipeline_data/` mount. The existing 
 - **Endpoint (CPU API):** `POST /api/vision/classify-teams/{video_id}`
 - **Delegates to:** `inference-vision POST /api/classify-teams`
 - **Model:** SigLIP embeddings + UMAP + K-means (via `sports.TeamClassifier`)
-- **Input:** `pipeline_data/api/videos/{stem}.mp4` + `pipeline_data/api/analysis/detections/{stem}.json`
-- **Output:** `pipeline_data/api/analysis/teams/{stem}.json`
-- **Content:** Team ID per tracker ID, team names/colors
+- **Input:** `videos/{stem}.mp4` + `analysis/detections/{det_config_key}/{stem}.json`
+- **Output:** `analysis/teams/{config_key}/{stem}.json`
+- **Config key inputs:** `{stride, crop_scale, det_config_key}`
 - **Default parameters:** stride=30, crop_scale=0.4, k=2
 - **Dependencies:** Stage 1
-- **Note:** TeamClassifier operates on per-crop embeddings aggregated over sampled frames. It does not require tracker IDs — it clusters crops by visual appearance, then the result is keyed by detection index. If tracks are available, team labels can be propagated to tracker IDs at render time.
+
+**Output JSON schema:**
+
+```json
+{
+  "_meta": { "stage": "teams", "config_key": "...", "upstream": {"detections": "..."} },
+  "palette": {
+    "0": {"name": "Team A", "color": "#006BB6"},
+    "1": {"name": "Team B", "color": "#007A33"}
+  },
+  "assignments": [
+    {"frame_index": 0, "detection_index": 3, "team_id": 0},
+    {"frame_index": 0, "detection_index": 5, "team_id": 1}
+  ]
+}
+```
+
+The classifier operates on per-crop embeddings sampled at `stride` intervals. It does not require tracker IDs. The `assignments` array maps `(frame_index, detection_index)` → `team_id`. At render time, if tracks are available, team labels are propagated to tracker IDs by joining on `(frame_index, detection_index)`.
+
+The `palette` section holds team names and colors. These are initially auto-assigned (team 0/1) and can be manually corrected via a future endpoint or by editing the JSON.
 
 ### Stage 4: Jersey Number OCR
 
 - **Endpoint (CPU API):** `POST /api/vision/ocr/{video_id}`
 - **Delegates to:** `inference-roboflow POST /api/ocr`
 - **Model:** `basketball-jersey-numbers-ocr/3` (SmolVLM2)
-- **Input:** `pipeline_data/api/videos/{stem}.mp4` + `pipeline_data/api/analysis/detections/{stem}.json`
-- **Output:** `pipeline_data/api/analysis/jerseys/{stem}.json`
+- **Input:** `videos/{stem}.mp4` + `analysis/tracks/{track_config_key}/{stem}.json`
+- **Output:** `analysis/jerseys/{config_key}/{stem}.json`
+- **Config key inputs:** `{model_id, n_consecutive, ocr_interval, track_config_key}`
 - **Content:** Validated jersey numbers per tracker ID (consecutive agreement n=3)
 - **Dependencies:** Stage 2 (needs tracker IDs for temporal validation)
 
@@ -89,8 +184,9 @@ All paths below are relative to the shared `pipeline_data/` mount. The existing 
 - **Delegates to:** `inference-roboflow POST /api/keypoints`
 - **CPU computes:** Homography from keypoints + player position transform
 - **Model:** `basketball-court-detection-2/14` (keypoint detection)
-- **Input:** `pipeline_data/api/videos/{stem}.mp4` + `pipeline_data/api/analysis/detections/{stem}.json`
-- **Output:** `pipeline_data/api/analysis/court/{stem}.json`
+- **Input:** `videos/{stem}.mp4` + `analysis/detections/{det_config_key}/{stem}.json`
+- **Output:** `analysis/court/{config_key}/{stem}.json`
+- **Config key inputs:** `{model_id, keypoint_confidence, anchor_confidence, det_config_key}`
 - **Content:** Per-frame court XY positions (feet), cleaned trajectories
 - **Default parameters:** keypoint_confidence=0.3, anchor_confidence=0.5
 - **Dependencies:** Stage 1
@@ -99,8 +195,9 @@ All paths below are relative to the shared `pipeline_data/` mount. The existing 
 
 - **Endpoint (CPU API):** `POST /api/vision/render/{video_id}`
 - **Runs on:** CPU (ffmpeg/opencv, no GPU)
-- **Input:** All previous stage JSONs + source video
-- **Output:** `pipeline_data/api/analysis/renders/{stem}.mp4`
+- **Input:** All previous stage JSONs (resolved by their config keys) + source video
+- **Output:** `analysis/renders/{config_key}/{stem}.mp4`
+- **Config key inputs:** `{det_config_key, track_config_key, teams_config_key, jerseys_config_key, court_config_key}`
 - **Content:** Annotated video with team-colored masks, jersey labels, court overlay
 - **Dependencies:** Stages 1-5
 
@@ -114,35 +211,112 @@ detect (1)
   └── court-map (5) ──────┘
 ```
 
-Stages 2, 3, and 5 can run in parallel after stage 1 completes. Stage 4 (OCR) depends on stage 2 (tracking) because jersey number validation uses tracker IDs for temporal consistency. Stage 6 (render) depends on all previous stages.
+Stage 4 (OCR) depends on stage 2 (tracking) because jersey number validation uses tracker IDs for temporal consistency. Stage 6 (render) depends on all previous stages.
 
 If a prerequisite is missing, the CPU API returns HTTP 409 with a JSON body indicating which stage(s) must be run first: `{"detail": "Stage 'track' must be completed before 'ocr'", "missing": ["track"]}`.
+
+## Execution Model
+
+The CPU API calls stages **sequentially by default**. It does not issue parallel requests to GPU services. This is intentional:
+
+- Stages 2 (track) and 3 (classify-teams) both hit `inference-vision`. Running them concurrently would require the GPU container to handle concurrent CUDA workloads, with GPU memory budgeting and request queuing — unnecessary complexity for a single-host deployment.
+- Stages 4 (OCR) and 5 (court-map) both hit `inference-roboflow`. Same constraint.
+- The natural call order is: detect → track → classify-teams → ocr → court-map → render. Each stage is fast to skip if cached.
+
+Parallel execution is a future optimization. It would require adding a request queue (e.g., FastAPI BackgroundTasks or Celery) to each GPU container, with `CUDA_MEM_FRACTION` limits to prevent OOM.
+
+## Status & Lifecycle
+
+### Status Model
+
+Each stage maintains a status sidecar file alongside its output:
+
+```
+analysis/detections/{config_key}/{stem}.status.json
+```
+
+Status values align with the frontend's existing `StageStatus` type (`frontend/src/lib/types.ts:53`):
+
+| Status | Meaning |
+|---|---|
+| `pending` | No output or status file exists |
+| `active` | Processing started, not yet complete |
+| `complete` | Output file exists and is valid |
+| `skipped` | Output file existed before this request (cache hit) |
+| `error` | Processing failed; error message recorded |
+
+### Status Sidecar Format
+
+```json
+{
+  "status": "complete",
+  "started_at": "2026-03-21T14:30:00Z",
+  "completed_at": "2026-03-21T14:31:42Z",
+  "duration_ms": 102000,
+  "error": null,
+  "config_key": "c-a3f82b1"
+}
+```
+
+Written atomically (write `.tmp`, rename) at:
+- **Start:** `{"status": "active", "started_at": "...", ...}`
+- **Completion:** `{"status": "complete", "completed_at": "...", "duration_ms": ..., ...}`
+- **Failure:** `{"status": "error", "error": "...", ...}`
 
 ### Status Endpoint
 
 - **Endpoint:** `GET /api/vision/status/{video_id}`
-- **Response:** `{"video_id": "...", "stages": {"detect": "done", "track": "pending", ...}}`
-- **Status values:** `"pending"` (output file does not exist), `"done"` (output file exists)
-- Determined by checking existence of output files on disk. There is no persistent "running" state — if a request is in-flight, the endpoint still reports "pending" until the output file is written.
+- **Query:** `config_key: str | None` — if provided, checks status for that specific config. If omitted, returns the latest (most recent `completed_at`) config per stage.
+- **Response:**
 
-## Caching
+```python
+class StageStatusResponse(BaseModel):
+    status: str          # "pending" | "active" | "complete" | "skipped" | "error"
+    config_key: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_ms: int | None = None
+    error: str | None = None
 
-All endpoints follow the existing skip-on-exists pattern: if the output file already exists, return immediately with `skipped: true`. No reprocessing unless the output file is deleted.
+class PipelineStatusResponse(BaseModel):
+    video_id: str
+    stages: dict[str, StageStatusResponse]
+```
+
+### Crash Recovery
+
+If a stage crashes (container restart, OOM kill), the status sidecar remains `"active"` with a `started_at` but no `completed_at`. The CPU API detects this as stale if `started_at` is older than the GPU service timeout (600s) and treats it as `"error"` with a synthetic message. The stale `.status.json` is removed so the stage can be retried.
 
 ## Error Handling
 
 - **GPU service unreachable:** CPU API returns HTTP 502 with the connection error. Timeout for GPU service calls: 600 seconds (video processing is slow).
-- **Atomic writes:** GPU services write results to a temporary file (`.tmp` suffix) and rename on completion. This prevents corrupt cache hits if a job fails mid-write.
-- **Partial failure:** If a GPU service returns an error, the CPU API forwards the error as HTTP 500 with the GPU service's error message. No output file is written, so retry will reprocess.
+- **Atomic writes:** GPU services write results to a temporary file (`.tmp` suffix) and rename on completion. This prevents corrupt cache hits if a job fails mid-write. Status sidecars follow the same pattern.
+- **Partial failure:** If a GPU service returns an error, the CPU API writes an `error` status sidecar and forwards the error as HTTP 500 with the GPU service's error message. No output file is written, so retry will reprocess.
 - **409 responses:** Include which prerequisite stage(s) are missing (see above).
+- **Concurrent requests for same video_id + config_key:** The status sidecar's `active` state acts as a lightweight lock. If a request arrives while a stage is already `active`, the CPU API returns HTTP 409 with `"detail": "Stage 'detect' is already running"`.
 
 ## Data Exchange
 
 CPU API and GPU services communicate via:
-- **HTTP** for triggering work (lightweight JSON payloads: video paths, parameters)
+- **HTTP** for triggering work (lightweight JSON payloads: `video_id`, parameters — no raw filesystem paths)
 - **Shared filesystem** (`./pipeline_data`) for large artifacts (video files, result JSONs)
 
-No frames or crops are sent over HTTP. GPU services read video from disk and write results to disk.
+No frames or crops are sent over HTTP. Each service resolves `video_id` → filesystem paths internally using the shared `video_registry.yml` and its own `data_dir` config.
+
+### GPU Service Request/Response (internal)
+
+```python
+class InferenceRequest(BaseModel):
+    video_id: str
+    params: dict = {}              # stage-specific parameters
+    upstream_configs: dict = {}    # e.g., {"detections": "c-a3f82b1"}
+
+class InferenceResponse(BaseModel):
+    status: str                    # "ok" or "error"
+    config_key: str                # computed config key for this run
+    output_path: str               # relative to data_dir
+    error: str | None = None
+```
 
 ## Schemas
 
@@ -150,83 +324,87 @@ No frames or crops are sent over HTTP. GPU services read video from disk and wri
 
 ```python
 class DetectRequest(BaseModel):
+    model_id: str = "basketball-player-detection-3-ycjdo/4"
     confidence: float = 0.4
     iou_threshold: float = 0.9
     max_frames: int | None = None
 
 class TrackRequest(BaseModel):
+    det_config_key: str            # which detection run to use
     max_frames: int | None = None
 
 class ClassifyTeamsRequest(BaseModel):
+    det_config_key: str
     stride: int = 30
     crop_scale: float = 0.4
 
 class OCRRequest(BaseModel):
+    track_config_key: str          # which tracking run to use
+    model_id: str = "basketball-jersey-numbers-ocr/3"
     n_consecutive: int = 3
-    ocr_interval: int = 5          # run OCR every N frames
+    ocr_interval: int = 5
 
 class CourtMapRequest(BaseModel):
+    det_config_key: str
+    model_id: str = "basketball-court-detection-2/14"
     keypoint_confidence: float = 0.3
     anchor_confidence: float = 0.5
 
+class RenderRequest(BaseModel):
+    det_config_key: str
+    track_config_key: str
+    teams_config_key: str
+    jerseys_config_key: str
+    court_config_key: str
+
+class StageStatusResponse(BaseModel):
+    status: str
+    config_key: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_ms: int | None = None
+    error: str | None = None
+
 class DetectResponse(BaseModel):
     video_id: str
+    config_key: str
     n_frames: int
     n_detections: int
-    output_path: str
     skipped: bool = False
 
 class TrackResponse(BaseModel):
     video_id: str
+    config_key: str
     n_frames: int
     n_tracks: int
-    output_path: str
     skipped: bool = False
 
 class ClassifyTeamsResponse(BaseModel):
     video_id: str
-    teams: dict[str, str]
-    output_path: str
+    config_key: str
+    palette: dict[str, dict]       # {"0": {"name": "...", "color": "#..."}}
     skipped: bool = False
 
 class OCRResponse(BaseModel):
     video_id: str
-    players: dict[str, str]
-    output_path: str
+    config_key: str
+    players: dict[str, str]        # {"tracker_id": "jersey_number"}
     skipped: bool = False
 
 class CourtMapResponse(BaseModel):
     video_id: str
+    config_key: str
     n_frames_mapped: int
-    output_path: str
     skipped: bool = False
 
 class RenderResponse(BaseModel):
     video_id: str
-    video_path: str
+    config_key: str
     skipped: bool = False
 
 class PipelineStatusResponse(BaseModel):
     video_id: str
-    stages: dict[str, str]         # values: "pending" | "done"
-```
-
-### GPU Service Schemas (internal)
-
-Minimal request/response. Each endpoint receives:
-```python
-class InferenceRequest(BaseModel):
-    video_path: str
-    output_dir: str
-    params: dict = {}
-```
-
-Returns:
-```python
-class InferenceResponse(BaseModel):
-    status: str  # "ok" or "error"
-    output_path: str
-    error: str | None = None
+    stages: dict[str, StageStatusResponse]
 ```
 
 ## Configuration
@@ -263,7 +441,7 @@ GPU inference services use the `BT_` (BasketTube) prefix to distinguish from the
 
 ## GPU Sharing
 
-On a single-GPU host, both `inference-roboflow` and `inference-vision` share the same GPU. They are not expected to run simultaneously during normal pipeline execution — the CPU API calls them sequentially (detect first via roboflow, then track via vision, etc.). If both are idle, their memory footprint is minimal. For multi-GPU hosts, `NVIDIA_VISIBLE_DEVICES` can be set per container to pin each to a specific GPU.
+On a single-GPU host, both `inference-roboflow` and `inference-vision` share the same GPU. They are called sequentially by the CPU API (see Execution Model). If both are idle, their memory footprint is minimal. For multi-GPU hosts, `NVIDIA_VISIBLE_DEVICES` can be set per container to pin each to a specific GPU.
 
 ## Docker
 
@@ -279,6 +457,8 @@ The current `Dockerfile` (a GPU/notebook image based on `pytorch`) will be repla
 
 The `notebook` service reuses `Dockerfile.vision` with a different CMD (`jupyter lab`). The notebook dependency group from `pyproject.toml` (`jupyterlab`, `ipywidgets`) is installed in `Dockerfile.vision`.
 
+All containers mount `video_registry.yml` read-only for `resolve_stem()`.
+
 ### Docker Compose
 
 All services use `network_mode: host` for simplicity on single-host deployments. With host networking, port mappings are implicit (each service binds directly to its port).
@@ -289,8 +469,9 @@ services:
     build: { dockerfile: Dockerfile }
     profiles: [nvidia, cpu]
     network_mode: host
-    volumes: [./pipeline_data:/app/pipeline_data]
-    # Binds to :8080
+    volumes:
+      - ./pipeline_data:/app/pipeline_data
+      - ./video_registry.yml:/app/video_registry.yml:ro
 
   inference-roboflow:
     build: { dockerfile: Dockerfile.roboflow }
@@ -298,8 +479,9 @@ services:
     network_mode: host
     shm_size: "8gb"
     GPU reservation
-    volumes: [./pipeline_data:/app/pipeline_data]
-    # Binds to :8091
+    volumes:
+      - ./pipeline_data:/app/pipeline_data
+      - ./video_registry.yml:/app/video_registry.yml:ro
 
   inference-vision:
     build: { dockerfile: Dockerfile.vision }
@@ -307,8 +489,9 @@ services:
     network_mode: host
     shm_size: "8gb"
     GPU reservation
-    volumes: [./pipeline_data:/app/pipeline_data]
-    # Binds to :8092
+    volumes:
+      - ./pipeline_data:/app/pipeline_data
+      - ./video_registry.yml:/app/video_registry.yml:ro
 
   notebook:
     build: { dockerfile: Dockerfile.vision }
@@ -319,8 +502,8 @@ services:
     GPU reservation
     volumes:
       - ./pipeline_data:/app/pipeline_data
+      - ./video_registry.yml:/app/video_registry.yml:ro
       - ./notebooks:/workspace/notebooks
-    # Binds to :8888
 ```
 
 ## New Code
@@ -339,6 +522,14 @@ services:
 | `api/src/services/vision_service.py` | HTTP client to GPU services (httpx async) |
 | `Dockerfile.roboflow` | GPU Dockerfile for Roboflow inference |
 | `Dockerfile.vision` | GPU Dockerfile for SAM2 + TeamClassifier + notebook |
+
+## Existing Code Modified
+
+| File | Change |
+|---|---|
+| `api/src/core/config.py` | Add `inference_roboflow_url`, `inference_vision_url`, `analysis_dir` |
+| `api/src/main.py` | Register vision router |
+| `api/src/core/video_registry.py` | Add `resolve_stem()` alias (if not already present) |
 
 ## Existing Code Unchanged
 
