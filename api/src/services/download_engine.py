@@ -58,7 +58,7 @@ def download_video(url, destination_folder, filename=None):
         return str(save_path)
     print(f"Downloading: {title}...", end=" ", flush=True)
     ydl_opts = _yt_dlp_opts(
-        format="bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+        format="bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc1]+bestaudio/best",
         merge_output_format="mp4",
         outtmpl=str(pathlib.Path(destination_folder) / (safe_title + ".%(ext)s")),
     )
