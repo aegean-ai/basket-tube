@@ -1,7 +1,6 @@
 """BasketTube FastAPI application."""
 
 import logging
-from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,35 +9,32 @@ from api.src.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan."""
-    logger.info("Application ready.")
-
-    if settings.logfire_write_token:
-        try:
-            import logfire
-            logfire.configure(
-                write_token=settings.logfire_write_token,
-                service_name="basket-tube",
-            )
-            logfire.instrument_fastapi(app)
-            logger.info("Logfire tracing enabled.")
-        except ImportError:
-            logger.info("Logfire not installed — tracing disabled.")
-
-    yield
-
-    logger.info("Shutting down.")
+# ── Logfire instrumentation ───────────────────────────────────────────
+# Configure before app creation so all spans are captured.
+# Uses the project token from .logfire/ (set via `logfire projects use basket-tube`).
+# Falls back to FW_LOGFIRE_WRITE_TOKEN env var, or disables if neither is set.
+try:
+    import logfire
+    logfire.configure(
+        token=settings.logfire_write_token or None,
+        service_name="basket-tube-api",
+    )
+    _logfire_available = True
+    logger.info("Logfire tracing enabled.")
+except ImportError:
+    _logfire_available = False
+    logger.info("Logfire not installed — tracing disabled.")
 
 
 def create_app() -> FastAPI:
     """Application factory — creates and configures the FastAPI instance."""
     app = FastAPI(
         title=settings.app_title,
-        lifespan=lifespan,
     )
+
+    # Instrument FastAPI with Logfire
+    if _logfire_available:
+        logfire.instrument_fastapi(app)
 
     if settings.cors_enabled:
         app.add_middleware(
