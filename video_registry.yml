@@ -7,12 +7,12 @@
 # To add a new video, append an entry here and restart the API.
 
 videos:
-  - id: LPDnemFoqVk
-    title: "Warriors & Lakers Instant Classic - 2021 Play-In Tournament"
-    url: https://www.youtube.com/watch?v=LPDnemFoqVk
-    source_language: en
-
   - id: WLQ1-clip
     title: "Warriors vs Lakers Q1 Clip"
     url: local
+    source_language: en
+
+  - id: LPDnemFoqVk
+    title: "Warriors & Lakers Instant Classic - 2021 Play-In Tournament"
+    url: https://www.youtube.com/watch?v=LPDnemFoqVk
     source_language: en
