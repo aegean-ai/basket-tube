@@ -203,3 +203,4 @@ whisper_models/
 *-verify.png
 .worktrees/
 dist/
+.logfire/
