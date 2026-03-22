@@ -15,12 +15,14 @@ logger = logging.getLogger(__name__)
 # Falls back to FW_LOGFIRE_WRITE_TOKEN env var, or disables if neither is set.
 try:
     import logfire
-    logfire.configure(
-        token=settings.logfire_write_token or None,
-        service_name="basket-tube-api",
-    )
-    _logfire_available = True
-    logger.info("Logfire tracing enabled.")
+    _token = settings.logfire_write_token or None
+    if _token:
+        logfire.configure(token=_token, service_name="basket-tube-api")
+        _logfire_available = True
+        logger.info("Logfire tracing enabled.")
+    else:
+        _logfire_available = False
+        logger.info("Logfire disabled — no FW_LOGFIRE_WRITE_TOKEN set.")
 except ImportError:
     _logfire_available = False
     logger.info("Logfire not installed — tracing disabled.")
