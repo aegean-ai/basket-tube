@@ -10,7 +10,7 @@ class VisionService:
     def __init__(
         self,
         gpu_url: str = "http://localhost:8090",
-        timeout: float = 600.0,
+        timeout: float = 3600.0,
     ):
         self.gpu_url = gpu_url.rstrip("/")
         self.timeout = timeout
