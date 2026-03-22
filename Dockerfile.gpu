@@ -9,19 +9,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 RUN mkdir -p /etc/pip && pip list --format=freeze > /etc/pip/constraint.txt
 
-# Clone and install SAM2
-WORKDIR /opt
-RUN git clone https://github.com/Gy920/segment-anything-2-real-time.git \
-    && cd segment-anything-2-real-time \
-    && pip install .
-
-RUN cd /opt/segment-anything-2-real-time/checkpoints \
-    && bash download_ckpts.sh
+# Install SAM2 from Meta's official package
+RUN pip install --no-cache-dir SAM-2
 
 WORKDIR /app
 
 # Shared utilities from api/src/ (artifacts, video_registry)
-# config.py is NOT copied — GPU service uses BT_ env vars, not FW_ settings.
 COPY api/__init__.py api/
 COPY api/src/__init__.py api/src/
 COPY api/src/artifacts.py api/src/
@@ -37,7 +30,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     fastapi uvicorn pyyaml \
     jupyterlab ipywidgets
 
-ENV SAM2_REPO=/opt/segment-anything-2-real-time
 ENV ONNXRUNTIME_EXECUTION_PROVIDERS="[CUDAExecutionProvider]"
 
 EXPOSE 8090

@@ -76,7 +76,6 @@ services:
     environment:
       - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
       - INFERENCE_MODE=${INFERENCE_MODE:-local}
-      - SAM2_REPO=/opt/segment-anything-2-real-time
       - HF_TOKEN=${HF_TOKEN:-}
       - BT_DATA_DIR=/app/pipeline_data/api
     volumes:
@@ -103,7 +102,6 @@ services:
     shm_size: "8gb"
     command: ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--NotebookApp.token=''", "--NotebookApp.password=''"]
     environment:
-      - SAM2_REPO=/opt/segment-anything-2-real-time
       - HF_TOKEN=${HF_TOKEN:-}
       - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
       - ONNXRUNTIME_EXECUTION_PROVIDERS=[CUDAExecutionProvider]
