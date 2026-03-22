@@ -20,11 +20,11 @@ app = FastAPI(title="inference-roboflow")
 DATA_DIR = Path(os.environ.get("BT_DATA_DIR", "/app/pipeline_data/api"))
 
 # Share core utilities with CPU API
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 from api.src.core.video_registry import resolve_title as resolve_stem
 from api.src.core.artifacts import config_key, artifact_path, atomic_write_json
 
-from inference_roboflow.models import (
+from basket_tube.inference.roboflow.models import (
     get_model, run_detection, run_keypoints, run_ocr,
     PLAYER_DETECTION_MODEL_ID, COURT_KEYPOINT_MODEL_ID,
     JERSEY_OCR_MODEL_ID, OCR_PROMPT,

@@ -18,7 +18,9 @@ COPY api/src/core/video_registry.py api/src/core/
 COPY api/src/core/__init__.py api/src/core/
 COPY api/src/__init__.py api/src/
 COPY api/__init__.py api/
-COPY inference_roboflow/ inference_roboflow/
+COPY basket_tube/__init__.py basket_tube/
+COPY basket_tube/inference/__init__.py basket_tube/inference/
+COPY basket_tube/inference/roboflow/ basket_tube/inference/roboflow/
 COPY pyproject.toml ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -31,4 +33,4 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ENV ONNXRUNTIME_EXECUTION_PROVIDERS="[CUDAExecutionProvider]"
 
 EXPOSE 8091
-CMD ["uvicorn", "inference_roboflow.main:app", "--host", "0.0.0.0", "--port", "8091"]
+CMD ["uvicorn", "basket_tube.inference.roboflow.main:app", "--host", "0.0.0.0", "--port", "8091"]

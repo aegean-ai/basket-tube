@@ -19,7 +19,7 @@ app = FastAPI(title="inference-vision")
 DATA_DIR = Path(os.environ.get("BT_DATA_DIR", "/app/pipeline_data/api"))
 SAM2_REPO = os.environ.get("SAM2_REPO", "/opt/segment-anything-2-real-time")
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 from api.src.core.video_registry import resolve_title as resolve_stem
 from api.src.core.artifacts import config_key, artifact_path, atomic_write_json
 
@@ -78,7 +78,7 @@ async def track(req: InferenceRequest):
         predictor = build_sam2_camera_predictor(sam2_config, checkpoint)
         os.chdir(old_cwd)
 
-        from inference_vision.tracker import SAM2Tracker
+        from basket_tube.inference.vision.tracker import SAM2Tracker
         tracker = SAM2Tracker(predictor)
 
         frame_generator = sv.get_video_frames_generator(str(video_path))
@@ -170,7 +170,7 @@ async def classify_teams(req: InferenceRequest):
 
         video_path = DATA_DIR / "videos" / f"{stem}.mp4"
 
-        from inference_vision.classifier import extract_player_crops
+        from basket_tube.inference.vision.classifier import extract_player_crops
         from sports import TeamClassifier
 
         crops = []
