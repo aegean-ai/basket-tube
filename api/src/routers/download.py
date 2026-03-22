@@ -37,9 +37,12 @@ async def download_endpoint(body: DownloadRequest):
         _download_service.download_video(body.url, str(videos_dir), stem)
 
     if not caption_path.exists():
-        _download_service.download_caption(body.url, str(captions_dir), stem)
+        try:
+            _download_service.download_caption(body.url, str(captions_dir), stem)
+        except Exception:
+            pass  # Captions may be disabled for this video — not a fatal error
 
-    segments = _download_service.read_caption_segments(caption_path)
+    segments = _download_service.read_caption_segments(caption_path) if caption_path.exists() else []
 
     return DownloadResponse(
         video_id=video_id,
