@@ -19,6 +19,11 @@ same pattern:
 import httpx
 from fastapi import APIRouter, HTTPException
 
+try:
+    import logfire
+except ImportError:
+    logfire = None  # type: ignore
+
 from api.src.artifacts import (
     artifact_path,
     check_stale,
@@ -158,12 +163,12 @@ async def detect(video_id: str, req: DetectRequest = DetectRequest()):
 
 @router.post("/track/{video_id}", response_model=TrackResponse)
 async def track(video_id: str, req: TrackRequest):
-    """Run SAM2 tracking using existing detections."""
+    """Run ByteTrack multi-object tracking using existing detections."""
     stem = _resolve_or_404(video_id)
     _require_upstream("detections", video_id, stem, req.det_config_key)
 
     cfg_params = {
-        "sam2_checkpoint": req.sam2_checkpoint,
+        "tracker": "bytetrack",
         "det_config_key": req.det_config_key,
     }
     cfg_key = config_key(cfg_params)

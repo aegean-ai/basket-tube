@@ -17,7 +17,6 @@ class DetectRequest(BaseModel):
 
 class TrackRequest(BaseModel):
     det_config_key: str
-    sam2_checkpoint: str = "sam2.1_hiera_large.pt"
     max_frames: int | None = None
 
 
