@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from api.src.core.artifacts import (
+from api.src.artifacts import (
     artifact_path,
     atomic_write_json,
     check_stale,
@@ -15,8 +15,8 @@ from api.src.core.artifacts import (
     status_path_for,
     write_status,
 )
-from api.src.core.config import settings
-from api.src.core.video_registry import resolve_stem
+from api.src.config import settings
+from api.src.video_registry import resolve_stem
 from api.src.schemas.captions import TextTimelineRequest, TextTimelineResponse
 from api.src.services.text_timeline_service import build_timeline
 

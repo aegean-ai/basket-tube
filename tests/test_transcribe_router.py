@@ -18,7 +18,7 @@ def ui_dir(tmp_path):
 @pytest.fixture()
 def client(monkeypatch, ui_dir):
     """Test client with settings patched to tmp dir."""
-    from api.src.core.config import settings
+    from api.src.config import settings
     monkeypatch.setattr(settings, "data_dir", ui_dir)
 
     # Mock resolve_title to return "Test Title" for any video ID

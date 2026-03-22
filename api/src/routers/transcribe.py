@@ -5,8 +5,8 @@ import pathlib
 
 from fastapi import APIRouter, HTTPException, Query
 
-from api.src.core.config import settings
-from api.src.core.dependencies import resolve_title
+from api.src.config import settings
+from api.src.dependencies import resolve_title
 from api.src.schemas.transcribe import TranscribeResponse
 from api.src.services import whisper_service
 

@@ -59,8 +59,8 @@ class TestDependencyEnforcement:
 
 class TestSkipOnExists:
     def test_detect_skips_when_output_exists(self, client, tmp_path, monkeypatch):
-        from api.src.core import config as cfg_mod
-        from api.src.core.artifacts import artifact_path, config_key
+        from api.src import config as cfg_mod
+        from api.src.artifacts import artifact_path, config_key
 
         monkeypatch.setattr(cfg_mod.settings, "data_dir", tmp_path)
 

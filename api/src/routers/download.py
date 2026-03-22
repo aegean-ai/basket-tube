@@ -5,8 +5,8 @@ import pathlib
 
 from fastapi import APIRouter, HTTPException, Request
 
-from api.src.core.config import settings
-from api.src.core.video_registry import get_video
+from api.src.config import settings
+from api.src.video_registry import get_video
 from api.src.schemas.download import CaptionSegment, DownloadRequest, DownloadResponse
 from api.src.services.download_service import DownloadService
 

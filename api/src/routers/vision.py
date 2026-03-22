@@ -19,7 +19,7 @@ same pattern:
 import httpx
 from fastapi import APIRouter, HTTPException
 
-from api.src.core.artifacts import (
+from api.src.artifacts import (
     artifact_path,
     check_stale,
     config_key,
@@ -27,8 +27,8 @@ from api.src.core.artifacts import (
     status_path_for,
     write_status,
 )
-from api.src.core.config import settings
-from api.src.core.video_registry import resolve_stem
+from api.src.config import settings
+from api.src.video_registry import resolve_stem
 from api.src.schemas.vision import (
     ClassifyTeamsRequest,
     ClassifyTeamsResponse,

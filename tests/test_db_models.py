@@ -105,19 +105,19 @@ class TestGetDb:
 
 class TestConfigDatabaseUrl:
     def test_database_url_field_exists(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
 
         s = Settings(database_url="postgresql+asyncpg://u:p@localhost/db")
         assert s.database_url == "postgresql+asyncpg://u:p@localhost/db"
 
     def test_postgres_dsn_alias_backwards_compat(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
 
         s = Settings(postgres_dsn="postgresql+asyncpg://u:p@localhost/db")
         assert s.database_url == "postgresql+asyncpg://u:p@localhost/db"
 
     def test_database_echo_default_false(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
 
         s = Settings()
         assert s.database_echo is False
@@ -129,5 +129,5 @@ class TestConfigDatabaseUrl:
 
 class TestDependenciesReExport:
     def test_get_db_importable_from_dependencies(self):
-        from api.src.core.dependencies import get_db
+        from api.src.dependencies import get_db
         assert callable(get_db)

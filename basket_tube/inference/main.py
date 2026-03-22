@@ -31,8 +31,8 @@ SAM2_REPO = os.environ.get("SAM2_REPO", "/opt/segment-anything-2-real-time")
 
 # Share core utilities with CPU API
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from api.src.core.video_registry import resolve_title as resolve_stem
-from api.src.core.artifacts import config_key, artifact_path, atomic_write_json
+from api.src.video_registry import resolve_title as resolve_stem
+from api.src.artifacts import config_key, artifact_path, atomic_write_json
 
 from basket_tube.inference.roboflow.models import (
     get_model, run_detection, run_keypoints, run_ocr,

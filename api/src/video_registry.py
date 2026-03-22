@@ -20,7 +20,7 @@ class VideoEntry:
     target_language: str = "es"
 
 
-_REGISTRY_PATH = Path(__file__).resolve().parent.parent.parent.parent / "video_registry.yml"
+_REGISTRY_PATH = Path(__file__).resolve().parent.parent.parent / "video_registry.yml"
 
 
 @lru_cache

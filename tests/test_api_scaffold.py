@@ -10,10 +10,10 @@ class TestPackageStructure:
         import api.src  # noqa: F401
 
     def test_core_config_importable(self):
-        from api.src.core.config import Settings, settings  # noqa: F401
+        from api.src.config import Settings, settings  # noqa: F401
 
     def test_core_dependencies_importable(self):
-        from api.src.core.dependencies import get_settings  # noqa: F401
+        from api.src.dependencies import get_settings  # noqa: F401
 
     def test_main_importable(self):
         from api.src.main import create_app  # noqa: F401
@@ -30,30 +30,30 @@ class TestPackageStructure:
 
 class TestSettings:
     def test_s3_settings_have_defaults(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         s = Settings()
         assert hasattr(s, "s3_bucket")
 
     def test_env_prefix_is_fw(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         assert Settings.model_config.get("env_prefix") == "FW_"
 
     def test_settings_reads_from_env(self, monkeypatch):
         monkeypatch.setenv("FW_DEBUG", "true")
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         s = Settings()
         assert s.debug is True
 
     def test_cors_defaults(self):
-        from api.src.core.config import Settings
+        from api.src.config import Settings
         s = Settings()
         assert s.cors_enabled is True
 
 
 class TestDependencies:
     def test_get_settings_returns_settings_instance(self):
-        from api.src.core.config import Settings
-        from api.src.core.dependencies import get_settings
+        from api.src.config import Settings
+        from api.src.dependencies import get_settings
         result = get_settings()
         assert isinstance(result, Settings)
 

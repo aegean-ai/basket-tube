@@ -4,7 +4,7 @@ import math
 import re
 from datetime import datetime, timezone
 
-from api.src.core.artifacts import config_key as _config_key
+from api.src.artifacts import config_key as _config_key
 
 
 def normalize_text(raw: str) -> str:
