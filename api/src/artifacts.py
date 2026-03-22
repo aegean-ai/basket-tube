@@ -127,6 +127,18 @@ def read_status(sidecar: Path) -> dict:
         return {"status": "pending"}
 
 
+def write_resolved_config(
+    output_dir: Path, stage: str, config_key: str, params: dict, upstream: dict,
+) -> None:
+    """Write a frozen config snapshot alongside an artifact directory."""
+    from datetime import datetime, timezone
+    data = {
+        "config_key": config_key, "stage": stage, "params": params,
+        "upstream": upstream, "resolved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    atomic_write_json(output_dir / "config.resolved.json", data)
+
+
 def check_stale(sidecar: Path, timeout_s: float = 600.0) -> dict:
     """Crash-recovery helper.
 
