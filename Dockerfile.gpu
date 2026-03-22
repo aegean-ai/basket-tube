@@ -9,12 +9,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 RUN mkdir -p /etc/pip && pip list --format=freeze > /etc/pip/constraint.txt
 
-# Clone and install SAM2 (non-editable to avoid BuildKit cache issues)
+# Clone and install SAM2
 WORKDIR /opt
 RUN git clone https://github.com/Gy920/segment-anything-2-real-time.git \
     && cd segment-anything-2-real-time \
-    && pip install . \
-    && python setup.py build_ext --inplace
+    && pip install .
 
 RUN cd /opt/segment-anything-2-real-time/checkpoints \
     && bash download_ckpts.sh
