@@ -24,7 +24,7 @@ async def download_endpoint(body: DownloadRequest):
     captions_dir.mkdir(parents=True, exist_ok=True)
 
     # Check if this is a registered local video (no YouTube download needed)
-    entry = get_video(body.url)
+    entry = get_video(body.url)  # lookup by video ID
     if entry and entry.url == "local":
         stem = entry.title
         video_path = videos_dir / f"{stem}.mp4"
