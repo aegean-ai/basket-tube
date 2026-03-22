@@ -381,7 +381,7 @@ async def ocr(req: InferenceRequest):
         return InferenceResponse(status="error", config_key="", output_path="", error=str(e))
 
 
-# ── Tracking (SAM2) ──────────────────────────────────────────────────
+# ── Tracking (ByteTrack) ──────────────────────────────────────────────
 
 @app.post("/api/track", response_model=InferenceResponse)
 async def track(req: InferenceRequest):
@@ -391,7 +391,7 @@ async def track(req: InferenceRequest):
             return InferenceResponse(status="error", config_key="", output_path="", error=f"Unknown video_id: {req.video_id}")
 
         det_config_key = req.upstream_configs.get("detections", "")
-        cfg_params = {"sam2_checkpoint": "sam2.1_hiera_b+.pt", "det_config_key": det_config_key}
+        cfg_params = {"tracker": "bytetrack", "det_config_key": det_config_key}
         cfg_key = config_key(cfg_params)
         out = artifact_path(DATA_DIR, "tracks", cfg_key, stem)
 
@@ -404,48 +404,59 @@ async def track(req: InferenceRequest):
             return InferenceResponse(status="error", config_key=cfg_key, output_path="", error="Detections not found")
         det_data = json.loads(det_path.read_text())
 
-        video_path = DATA_DIR / "videos" / f"{stem}.mp4"
-
-        span = logfire.span("track.process", video_id=req.video_id, det_config_key=det_config_key) if _logfire else None
+        span = logfire.span("track.process", video_id=req.video_id, tracker="bytetrack", det_config_key=det_config_key) if _logfire else None
         if span:
             span.__enter__()
 
         try:
-            from basket_tube.inference.vision.tracker import build_tracker, SAM2Tracker
+            from basket_tube.inference.vision.tracker import PlayerTracker
 
-            _log_info("track.model_loading model=sam2.1_hiera_b+")
-            t0 = time.monotonic()
-            predictor = build_tracker(model_cfg="configs/sam2.1/sam2.1_hiera_b+.yaml")
-            _log_info("track.model_loaded elapsed_s={elapsed:.1f}", elapsed=time.monotonic() - t0)
+            fps = det_data.get("video_info", {}).get("fps", 30)
+            tracker = PlayerTracker(frame_rate=fps)
+            _log_info("track.initialized tracker=bytetrack fps={fps}", fps=fps)
 
-            tracker = SAM2Tracker(predictor)
+            frames_data = []
+            all_tracker_ids = set()
+            t_start = time.monotonic()
 
-            _log_info("track.init_video path={path}", path=str(video_path))
-            t0 = time.monotonic()
-            tracker.init_video(str(video_path))
-            _log_info("track.video_initialized elapsed_s={elapsed:.1f}", elapsed=time.monotonic() - t0)
+            for frame_det in det_data["frames"]:
+                idx = frame_det["frame_index"]
+                xyxy = np.array(frame_det["xyxy"])
+                class_ids = np.array(frame_det["class_id"])
+                confidences = np.array(frame_det["confidence"])
 
-            # Prompt first frame
-            first_frame = det_data["frames"][0]
-            xyxy = np.array(first_frame["xyxy"])
-            class_ids = np.array(first_frame["class_id"])
-            player_mask = np.isin(class_ids, PLAYER_CLASS_IDS)
+                # Filter to player classes only
+                player_mask = np.isin(class_ids, PLAYER_CLASS_IDS)
+                if not player_mask.any():
+                    frames_data.append({
+                        "frame_index": idx, "tracker_ids": [], "xyxy": [], "mask_rle": [],
+                    })
+                    continue
 
-            n_prompted = 0
-            if player_mask.any():
-                player_xyxy = xyxy[player_mask]
-                initial = sv.Detections(xyxy=player_xyxy, class_id=class_ids[player_mask])
-                initial.tracker_id = np.arange(1, len(initial) + 1)
-                tracker.prompt_frame(frame_idx=0, detections=initial)
-                n_prompted = len(initial)
-                _log_info("track.prompted n_objects={n} classes={classes}",
-                          n=n_prompted, classes=_class_distribution(class_ids[player_mask].tolist()))
+                player_dets = sv.Detections(
+                    xyxy=xyxy[player_mask],
+                    class_id=class_ids[player_mask],
+                    confidence=confidences[player_mask],
+                )
 
-            # Propagate
-            _log_info("track.propagating n_prompted_objects={n}", n=n_prompted)
-            t0 = time.monotonic()
-            frames_data, n_tracks = tracker.propagate()
-            elapsed = time.monotonic() - t0
+                tracked = tracker.update(player_dets)
+
+                tids = tracked.tracker_id.tolist() if tracked.tracker_id is not None else []
+                all_tracker_ids.update(tids)
+
+                frames_data.append({
+                    "frame_index": idx,
+                    "tracker_ids": tids,
+                    "xyxy": tracked.xyxy.tolist(),
+                    "mask_rle": [],
+                })
+
+                if idx > 0 and idx % LOG_INTERVAL == 0:
+                    _log_info("track.progress frame={frame} active_tracks={n_active} total_ids={n_total}",
+                              frame=idx, n_active=len(tids), n_total=len(all_tracker_ids))
+
+            elapsed = time.monotonic() - t_start
+            n_tracks = len(all_tracker_ids)
             _log_info("track.complete frames={n_frames} tracks={n_tracks} elapsed_s={elapsed:.1f} fps={fps:.1f}",
                        n_frames=len(frames_data), n_tracks=n_tracks, elapsed=elapsed,
                        fps=len(frames_data) / elapsed if elapsed > 0 else 0)
