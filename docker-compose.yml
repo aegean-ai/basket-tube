@@ -84,6 +84,7 @@ services:
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
+      - ./notebooks:/app/notebooks
       - inference-cache:/cache
     deploy:
       resources:
@@ -94,36 +95,6 @@ services:
               capabilities: [gpu]
     # Binds to :8090
 
-  # ── Notebook (Jupyter + GPU) ─────────────────────────────────────
-  notebook:
-    container_name: basket-tube-notebook
-    profiles: [nvidia]
-    build:
-      context: .
-      dockerfile: Dockerfile.gpu
-    restart: unless-stopped
-    network_mode: host
-    shm_size: "8gb"
-    command: ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--NotebookApp.token=''", "--NotebookApp.password=''"]
-    environment:
-      - HF_TOKEN=${HF_TOKEN:-}
-      - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
-      - ONNXRUNTIME_EXECUTION_PROVIDERS=[CUDAExecutionProvider]
-    volumes:
-      - ./pipeline_data:/app/pipeline_data
-      - ./video_registry.yml:/app/video_registry.yml:ro
-      - ./notebooks:/workspace/notebooks
-      - notebook-cache:/home/vscode/.cache
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # Binds to :8888
-
 volumes:
   whisper-cache:
   inference-cache:
-  notebook-cache:
