@@ -391,7 +391,7 @@ async def track(req: InferenceRequest):
             return InferenceResponse(status="error", config_key="", output_path="", error=f"Unknown video_id: {req.video_id}")
 
         det_config_key = req.upstream_configs.get("detections", "")
-        cfg_params = {"sam2_checkpoint": "sam2.1_hiera_large.pt", "det_config_key": det_config_key}
+        cfg_params = {"sam2_checkpoint": "sam2.1_hiera_b+.pt", "det_config_key": det_config_key}
         cfg_key = config_key(cfg_params)
         out = artifact_path(DATA_DIR, "tracks", cfg_key, stem)
 
@@ -413,9 +413,9 @@ async def track(req: InferenceRequest):
         try:
             from basket_tube.inference.vision.tracker import build_tracker, SAM2Tracker
 
-            _log_info("track.model_loading model=sam2.1_hiera_l")
+            _log_info("track.model_loading model=sam2.1_hiera_b+")
             t0 = time.monotonic()
-            predictor = build_tracker(model_cfg="configs/sam2.1/sam2.1_hiera_l.yaml")
+            predictor = build_tracker(model_cfg="configs/sam2.1/sam2.1_hiera_b+.yaml")
             _log_info("track.model_loaded elapsed_s={elapsed:.1f}", elapsed=time.monotonic() - t0)
 
             tracker = SAM2Tracker(predictor)
