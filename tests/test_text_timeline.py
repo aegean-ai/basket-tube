@@ -85,3 +85,59 @@ class TestBuildTimeline:
         result = build_timeline(transcript, source="caption", lexicon_version="v0.1")
         assert "_meta" in result
         assert result["_meta"]["stage"] == "text_timeline"
+
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def app():
+    from api.src.main import create_app
+    return create_app()
+
+
+@pytest.fixture
+def client(app):
+    return TestClient(app)
+
+
+class TestCaptionsRouter:
+    def test_timeline_endpoint_registered(self, app):
+        paths = list(app.openapi()["paths"].keys())
+        assert any("/api/captions/timeline" in p for p in paths)
+
+    def test_timeline_unknown_video_returns_404(self, client):
+        resp = client.post("/api/captions/timeline/nonexistent")
+        assert resp.status_code == 404
+
+    def test_timeline_missing_transcription_returns_409(self, client):
+        resp = client.post("/api/captions/timeline/LPDnemFoqVk")
+        assert resp.status_code == 409
+
+    def test_timeline_skip_on_exists(self, client, tmp_path, monkeypatch):
+        import json
+        from api.src.core import config as cfg_mod
+        from api.src.core.artifacts import artifact_path, config_key
+
+        monkeypatch.setattr(cfg_mod.settings, "data_dir", tmp_path)
+
+        stem = "Warriors & Lakers Instant Classic - 2021 Play-In Tournament"
+
+        # Create fake transcription so the 409 check passes
+        trans_dir = tmp_path / "transcriptions" / "whisper"
+        trans_dir.mkdir(parents=True)
+        (trans_dir / f"{stem}.json").write_text(json.dumps({
+            "language": "en", "text": "x", "segments": [{"id": 0, "start": 0, "end": 1, "text": "x"}]
+        }))
+
+        # Determine source (no youtube captions in tmp, so "stt")
+        cfg_params = {"stt_model_dir": "whisper", "source_type": "stt", "lexicon_version": "v0.1"}
+        cfg_key = config_key(cfg_params)
+        out = artifact_path(tmp_path, "text_timeline", cfg_key, stem)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"source": "stt", "segments": [{"segment_id": 0}], "_meta": {"config_key": cfg_key}}))
+
+        resp = client.post("/api/captions/timeline/LPDnemFoqVk")
+        assert resp.status_code == 200
+        assert resp.json()["skipped"] is True
