@@ -1,298 +1,320 @@
 "use client";
 
-import { useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import {
-  SettingsIcon,
-  XIcon,
-  DownloadIcon,
-  MicIcon,
-  LanguagesIcon,
-  Volume2Icon,
-  ScissorsIcon,
-  AlignCenterHorizontalIcon,
-  CircleDotIcon,
-  CircleIcon,
-} from "lucide-react";
-import { useStudioSettingsContext } from "@/contexts/studio-settings-context";
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { XIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { useAnalysisSettings } from "@/contexts/analysis-settings-context";
 
-type SettingsSection = "download" | "transcribe" | "translate" | "alignment" | "tts" | "stitch";
-
-const SECTIONS: { key: SettingsSection; label: string; icon: React.ElementType }[] = [
-  { key: "download", label: "Download", icon: DownloadIcon },
-  { key: "transcribe", label: "Transcribe", icon: MicIcon },
-  { key: "translate", label: "Translate", icon: LanguagesIcon },
-  { key: "alignment", label: "Alignment", icon: AlignCenterHorizontalIcon },
-  { key: "tts", label: "TTS", icon: Volume2Icon },
-  { key: "stitch", label: "Stitch", icon: ScissorsIcon },
-];
-
-function DownloadSettings() {
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">Auto-fetch captions</p>
-          <p className="text-xs text-muted-foreground">Download YouTube closed captions when available.</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">Always on</span>
-      </div>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">Video quality</p>
-          <p className="text-xs text-muted-foreground">yt-dlp downloads the best available quality.</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">Best available</span>
-      </div>
-    </div>
-  );
+interface SettingsDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
-function TranscribeSettings() {
-  const { settings, toggleUseYoutubeCaptions } = useStudioSettingsContext();
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">STT model</p>
-          <p className="text-xs text-muted-foreground">Whisper model used for transcription.</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">faster-whisper-medium</span>
-      </div>
-      <Separator />
-      <div className="flex items-start gap-3">
-        <Checkbox id="use-yt-captions" checked={settings.useYoutubeCaptions} onCheckedChange={toggleUseYoutubeCaptions} className="mt-0.5" />
-        <div>
-          <Label htmlFor="use-yt-captions" className="text-sm font-medium cursor-pointer">Use YouTube Captions</Label>
-          <p className="text-xs text-muted-foreground mt-1">
-            When available, use YouTube's closed captions instead of running Whisper.
-            Uncheck to always run Whisper STT.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
+export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
+  const { settings, updateGameContext, updateAdvanced } = useAnalysisSettings();
+  const { game_context, advanced } = settings;
 
-function TranslateSettings() {
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">Translation engine</p>
-          <p className="text-xs text-muted-foreground">Offline translation using argostranslate.</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">argostranslate</span>
-      </div>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">Target language</p>
-          <p className="text-xs text-muted-foreground">Default target language for translation.</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">Spanish (es)</span>
-      </div>
-    </div>
-  );
-}
+  // Team helpers
+  const setTeamName = (teamId: string, name: string) => {
+    updateGameContext({
+      teams: {
+        ...game_context.teams,
+        [teamId]: { ...game_context.teams[teamId], name },
+      },
+    });
+  };
 
-const ALIGNMENT_METHODS = [
-  { value: "baseline", label: "Baseline", description: "No temporal alignment — TTS audio plays at natural speed." },
-  { value: "aligned", label: "Aligned", description: "Syllable-based stretch/compress to match original segment timing." },
-];
+  const setTeamColor = (teamId: string, color: string) => {
+    updateGameContext({
+      teams: {
+        ...game_context.teams,
+        [teamId]: { ...game_context.teams[teamId], color },
+      },
+    });
+  };
 
-function AlignmentSettings() {
-  const { settings, toggleSetting } = useStudioSettingsContext();
-  return (
-    <div className="space-y-3">
-      <div>
-        <p className="text-sm font-medium">Dubbing method</p>
-        <p className="text-xs text-muted-foreground mt-1">Select one or more. Multiple selections produce separate output variants.</p>
-      </div>
-      {ALIGNMENT_METHODS.map((m) => (
-        <button
-          type="button"
-          key={m.value}
-          className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-border/40 p-3 text-left transition-colors hover:bg-accent/10 data-[checked=true]:border-primary/50 data-[checked=true]:bg-primary/5"
-          data-checked={settings.dubbing.includes(m.value)}
-          onClick={() => toggleSetting("dubbing", m.value)}
-        >
-          {settings.dubbing.includes(m.value) ? (
-            <CircleDotIcon className="size-4 shrink-0 text-primary" />
-          ) : (
-            <CircleIcon className="size-4 shrink-0 text-muted-foreground" />
-          )}
-          <div>
-            <div className="text-sm font-medium">{m.label}</div>
-            <div className="text-xs text-muted-foreground">{m.description}</div>
-          </div>
-        </button>
-      ))}
-    </div>
-  );
-}
+  // Roster helpers
+  const rosterEntries = Object.entries(game_context.roster);
 
-const DIARIZATION_METHODS = [
-  { value: "pyannote", label: "pyannote", description: "Speaker diarization via pyannote.audio" },
-];
+  const addPlayer = () => {
+    // Find an unused jersey number placeholder
+    let jersey = "";
+    let n = rosterEntries.length + 1;
+    while (game_context.roster[String(n)] !== undefined) n++;
+    jersey = String(n);
+    updateGameContext({
+      roster: { ...game_context.roster, [jersey]: "" },
+    });
+  };
 
-const VOICE_CLONING_METHODS = [
-  { value: "chatterbox", label: "Chatterbox", description: "Voice cloning via Chatterbox (Resemble AI)" },
-];
+  const updatePlayerJersey = (oldJersey: string, newJersey: string) => {
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(game_context.roster)) {
+      next[k === oldJersey ? newJersey : k] = v;
+    }
+    updateGameContext({ roster: next });
+  };
 
-function TTSSettings() {
-  const { settings, toggleSetting } = useStudioSettingsContext();
-  return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">TTS engine</p>
-          <p className="text-xs text-muted-foreground">Model used for speech synthesis.</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">Chatterbox</span>
-      </div>
+  const updatePlayerName = (jersey: string, name: string) => {
+    updateGameContext({
+      roster: { ...game_context.roster, [jersey]: name },
+    });
+  };
 
-      <Separator />
-
-      <div className="space-y-3">
-        <p className="text-sm font-medium">Diarization</p>
-        <p className="text-xs text-muted-foreground">Speaker detection method for multi-speaker videos.</p>
-        {DIARIZATION_METHODS.map((m) => (
-          <button
-            type="button"
-            key={m.value}
-            className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-border/40 p-3 text-left transition-colors hover:bg-accent/10 data-[checked=true]:border-primary/50 data-[checked=true]:bg-primary/5"
-            data-checked={settings.diarization.includes(m.value)}
-            onClick={() => toggleSetting("diarization", m.value)}
-          >
-            {settings.diarization.includes(m.value) ? (
-              <CircleDotIcon className="size-4 shrink-0 text-primary" />
-            ) : (
-              <CircleIcon className="size-4 shrink-0 text-muted-foreground" />
-            )}
-            <div>
-              <div className="text-sm font-medium">{m.label}</div>
-              <div className="text-xs text-muted-foreground">{m.description}</div>
-            </div>
-          </button>
-        ))}
-      </div>
-
-      <Separator />
-
-      <div className="space-y-3">
-        <p className="text-sm font-medium">Voice Cloning</p>
-        <p className="text-xs text-muted-foreground">Method for cloning the source speaker's voice.</p>
-        {VOICE_CLONING_METHODS.map((m) => (
-          <button
-            type="button"
-            key={m.value}
-            className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-border/40 p-3 text-left transition-colors hover:bg-accent/10 data-[checked=true]:border-primary/50 data-[checked=true]:bg-primary/5"
-            data-checked={settings.voiceCloning.includes(m.value)}
-            onClick={() => toggleSetting("voiceCloning", m.value)}
-          >
-            {settings.voiceCloning.includes(m.value) ? (
-              <CircleDotIcon className="size-4 shrink-0 text-primary" />
-            ) : (
-              <CircleIcon className="size-4 shrink-0 text-muted-foreground" />
-            )}
-            <div>
-              <div className="text-sm font-medium">{m.label}</div>
-              <div className="text-xs text-muted-foreground">{m.description}</div>
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function StitchSettings() {
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">Caption style</p>
-          <p className="text-xs text-muted-foreground">Rolling two-line captions (Google-style bridge display).</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">Two-line rolling</span>
-      </div>
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium">Video encoder</p>
-          <p className="text-xs text-muted-foreground">Audio-only remux via ffmpeg (no re-encoding).</p>
-        </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">ffmpeg remux</span>
-      </div>
-    </div>
-  );
-}
-
-const SECTION_CONTENT: Record<SettingsSection, { title: string; description: string; component: React.FC }> = {
-  download: { title: "Download", description: "Video download and caption fetching.", component: DownloadSettings },
-  transcribe: { title: "Transcribe", description: "Speech-to-text via Whisper.", component: TranscribeSettings },
-  translate: { title: "Translate", description: "Source-to-target language translation.", component: TranslateSettings },
-  alignment: { title: "Alignment", description: "Temporal alignment between source and dubbed audio.", component: AlignmentSettings },
-  tts: { title: "TTS", description: "Text-to-speech synthesis and voice configuration.", component: TTSSettings },
-  stitch: { title: "Stitch", description: "Final video assembly.", component: StitchSettings },
-};
-
-export function SettingsDialog() {
-  const [activeSection, setActiveSection] = useState<SettingsSection>("download");
-  const { title, description, component: Content } = SECTION_CONTENT[activeSection];
+  const removePlayer = (jersey: string) => {
+    const next = { ...game_context.roster };
+    delete next[jersey];
+    updateGameContext({ roster: next });
+  };
 
   return (
-    <Dialog.Root>
-      <Dialog.Trigger
-        render={
-          <Button variant="outline" size="icon" />
-        }
-      >
-        <SettingsIcon className="size-4" />
-      </Dialog.Trigger>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/50 transition-opacity duration-150 data-ending-style:opacity-0 data-starting-style:opacity-0 supports-backdrop-filter:backdrop-blur-sm" />
-        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-background shadow-2xl transition duration-200 data-ending-style:opacity-0 data-ending-style:scale-95 data-starting-style:opacity-0 data-starting-style:scale-95 w-[720px] max-h-[80vh]">
-          <div className="flex h-[560px]">
-            {/* Sidebar nav */}
-            <nav className="w-48 border-r p-4 flex flex-col gap-1 shrink-0">
-              <Dialog.Title className="text-sm font-semibold mb-3 px-2">Settings</Dialog.Title>
-              {SECTIONS.map(({ key, label, icon: Icon }) => (
-                <button
-                  type="button"
-                  key={key}
-                  onClick={() => setActiveSection(key)}
-                  className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors ${
-                    activeSection === key
-                      ? "bg-accent text-accent-foreground font-medium"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                  }`}
-                >
-                  <Icon className="size-3.5" />
-                  {label}
-                </button>
-              ))}
-            </nav>
-
-            {/* Content area */}
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="mb-1">
-                <h3 className="text-lg font-medium">{title}</h3>
-                <Dialog.Description className="text-sm text-muted-foreground">{description}</Dialog.Description>
-              </div>
-              <Separator className="my-4" />
-              <Content />
+        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-background shadow-2xl transition duration-200 data-ending-style:opacity-0 data-ending-style:scale-95 data-starting-style:opacity-0 data-starting-style:scale-95 w-[560px] max-h-[85vh] overflow-y-auto">
+          <div className="p-6 space-y-6">
+            {/* Header */}
+            <div>
+              <Dialog.Title className="text-lg font-semibold">
+                Analysis Settings
+              </Dialog.Title>
+              <Dialog.Description className="text-sm text-muted-foreground mt-1">
+                Configure game context and pipeline parameters.
+              </Dialog.Description>
             </div>
+
+            <Separator />
+
+            {/* Game Context */}
+            <section className="space-y-4">
+              <h3 className="text-sm font-semibold">Game Context</h3>
+
+              {/* Teams */}
+              <div className="space-y-3">
+                {(["0", "1"] as const).map((teamId, idx) => {
+                  const team = game_context.teams[teamId] ?? {
+                    name: `Team ${String.fromCharCode(65 + idx)}`,
+                    color: "#888888",
+                  };
+                  return (
+                    <div key={teamId} className="flex items-center gap-3">
+                      <span className="text-sm text-muted-foreground w-14 shrink-0">
+                        Team {idx}
+                      </span>
+                      <Input
+                        value={team.name}
+                        onChange={(e) => setTeamName(teamId, e.target.value)}
+                        placeholder={`Team ${idx} name`}
+                        className="flex-1"
+                      />
+                      <input
+                        type="color"
+                        value={team.color}
+                        onChange={(e) => setTeamColor(teamId, e.target.value)}
+                        className="h-8 w-10 cursor-pointer rounded-md border border-input bg-transparent p-0.5"
+                        title="Team color"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+
+              <Separator />
+
+              {/* Roster */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium">Roster</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={addPlayer}
+                    className="gap-1.5"
+                  >
+                    <PlusIcon className="size-3.5" />
+                    Add Player
+                  </Button>
+                </div>
+
+                {rosterEntries.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-2">
+                    No players added yet. Click "Add Player" to start.
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-24">Jersey #</TableHead>
+                        <TableHead>Player Name</TableHead>
+                        <TableHead className="w-10" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rosterEntries.map(([jersey, name]) => (
+                        <TableRow key={jersey}>
+                          <TableCell>
+                            <Input
+                              value={jersey}
+                              onChange={(e) =>
+                                updatePlayerJersey(jersey, e.target.value)
+                              }
+                              className="w-20 font-mono"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              value={name}
+                              onChange={(e) =>
+                                updatePlayerName(jersey, e.target.value)
+                              }
+                              placeholder="Player name"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => removePlayer(jersey)}
+                              aria-label={`Remove jersey ${jersey}`}
+                            >
+                              <Trash2Icon className="size-3.5 text-destructive" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </section>
+
+            {/* Advanced (collapsible) */}
+            <Accordion>
+              <AccordionItem value="advanced">
+                <AccordionTrigger className="text-sm font-semibold">
+                  Advanced
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-4 pt-2">
+                    {/* Detection Confidence */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm">Detection Confidence</label>
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {advanced.confidence.toFixed(2)}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={advanced.confidence}
+                        onChange={(e) =>
+                          updateAdvanced({ confidence: Number(e.target.value) })
+                        }
+                        className="w-full accent-primary"
+                      />
+                    </div>
+
+                    {/* IOU Threshold */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm">IOU Threshold</label>
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {advanced.iou_threshold.toFixed(2)}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={advanced.iou_threshold}
+                        onChange={(e) =>
+                          updateAdvanced({
+                            iou_threshold: Number(e.target.value),
+                          })
+                        }
+                        className="w-full accent-primary"
+                      />
+                    </div>
+
+                    {/* OCR Interval */}
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="text-sm">OCR Interval (frames)</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={advanced.ocr_interval}
+                        onChange={(e) =>
+                          updateAdvanced({
+                            ocr_interval: Number(e.target.value),
+                          })
+                        }
+                        className="w-24 text-right font-mono"
+                      />
+                    </div>
+
+                    {/* Team Crop Scale */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm">Team Crop Scale</label>
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {advanced.crop_scale.toFixed(2)}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={advanced.crop_scale}
+                        onChange={(e) =>
+                          updateAdvanced({ crop_scale: Number(e.target.value) })
+                        }
+                        className="w-full accent-primary"
+                      />
+                    </div>
+
+                    {/* Sampling Stride */}
+                    <div className="flex items-center justify-between gap-4">
+                      <label className="text-sm">Sampling Stride (frames)</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={advanced.stride}
+                        onChange={(e) =>
+                          updateAdvanced({ stride: Number(e.target.value) })
+                        }
+                        className="w-24 text-right font-mono"
+                      />
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </div>
 
           {/* Close button */}
           <Dialog.Close
-            render={
-              <Button variant="ghost" size="icon-sm" className="absolute top-3 right-3" />
-            }
+            render={<Button variant="ghost" size="icon-sm" className="absolute top-3 right-3" />}
           >
             <XIcon />
             <span className="sr-only">Close</span>
