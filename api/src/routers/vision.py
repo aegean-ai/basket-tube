@@ -177,7 +177,7 @@ async def track(video_id: str, req: TrackRequest):
 
     svc = _get_vision_service()
     try:
-        result = await svc.track(video_id, cfg_params, upstream_configs={"det_config_key": req.det_config_key})
+        result = await svc.track(video_id, cfg_params, upstream_configs={"detections": req.det_config_key})
     except httpx.HTTPStatusError as exc:
         write_status(sidecar, "error", error=str(exc))
         raise HTTPException(status_code=500, detail=f"GPU service error: {exc}") from exc
@@ -225,7 +225,7 @@ async def classify_teams(video_id: str, req: ClassifyTeamsRequest):
     svc = _get_vision_service()
     try:
         result = await svc.classify_teams(
-            video_id, cfg_params, upstream_configs={"det_config_key": req.det_config_key}
+            video_id, cfg_params, upstream_configs={"detections": req.det_config_key}
         )
     except httpx.HTTPStatusError as exc:
         write_status(sidecar, "error", error=str(exc))
@@ -274,7 +274,7 @@ async def ocr(video_id: str, req: OCRRequest):
     svc = _get_vision_service()
     try:
         result = await svc.ocr(
-            video_id, cfg_params, upstream_configs={"track_config_key": req.track_config_key}
+            video_id, cfg_params, upstream_configs={"tracks": req.track_config_key}
         )
     except httpx.HTTPStatusError as exc:
         write_status(sidecar, "error", error=str(exc))
@@ -323,7 +323,7 @@ async def court_map(video_id: str, req: CourtMapRequest):
     svc = _get_vision_service()
     try:
         result = await svc.keypoints(
-            video_id, cfg_params, upstream_configs={"det_config_key": req.det_config_key}
+            video_id, cfg_params, upstream_configs={"detections": req.det_config_key}
         )
     except httpx.HTTPStatusError as exc:
         write_status(sidecar, "error", error=str(exc))

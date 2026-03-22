@@ -45,7 +45,7 @@ async def timeline(video_id: str, req: TextTimelineRequest | None = None):
     yt_caption_path = settings.youtube_captions_dir / f"{stem}.txt"
     source = "caption" if yt_caption_path.exists() else "stt"
 
-    cfg_params = {"stt_model_dir": req.stt_model_dir, "source_type": source, "lexicon_version": req.lexicon_version}
+    cfg_params = {"stt_model_dir": req.stt_model_dir, "lexicon_version": req.lexicon_version}
     cfg_key = config_key(cfg_params)
     out = artifact_path(settings.data_dir, "text_timeline", cfg_key, stem)
     sidecar = status_path_for(out)

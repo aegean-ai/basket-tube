@@ -100,7 +100,7 @@ def build_timeline(
         "_meta": {
             "stage": "text_timeline",
             "config_key": cfg_key,
-            "upstream": {"stt_model_dir": stt_model_dir},
+            "upstream": {"transcription": stt_model_dir},
             "created_at": datetime.now(tz=timezone.utc).isoformat(),
         },
         "source": source,

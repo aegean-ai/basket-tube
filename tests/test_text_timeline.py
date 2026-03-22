@@ -132,7 +132,7 @@ class TestCaptionsRouter:
         }))
 
         # Determine source (no youtube captions in tmp, so "stt")
-        cfg_params = {"stt_model_dir": "whisper", "source_type": "stt", "lexicon_version": "v0.1"}
+        cfg_params = {"stt_model_dir": "whisper", "lexicon_version": "v0.1"}
         cfg_key = config_key(cfg_params)
         out = artifact_path(tmp_path, "text_timeline", cfg_key, stem)
         out.parent.mkdir(parents=True, exist_ok=True)

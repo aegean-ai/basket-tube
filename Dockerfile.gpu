@@ -21,13 +21,12 @@ RUN cd /opt/segment-anything-2-real-time/checkpoints \
 
 WORKDIR /app
 
-# Shared utilities from api/src/core/ (artifacts, video_registry)
+# Shared utilities from api/src/ (artifacts, video_registry)
 # config.py is NOT copied — GPU service uses BT_ env vars, not FW_ settings.
-COPY api/src/core/artifacts.py api/src/core/
-COPY api/src/core/video_registry.py api/src/core/
-COPY api/src/core/__init__.py api/src/core/
-COPY api/src/__init__.py api/src/
 COPY api/__init__.py api/
+COPY api/src/__init__.py api/src/
+COPY api/src/artifacts.py api/src/
+COPY api/src/video_registry.py api/src/
 COPY basket_tube/ basket_tube/
 COPY pyproject.toml ./
 
