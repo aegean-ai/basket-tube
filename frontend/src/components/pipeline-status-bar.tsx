@@ -1,17 +1,29 @@
 "use client";
 
 import { useElapsed } from "@/hooks/use-elapsed";
-import type { PipelineState, PipelineStage } from "@/lib/types";
+import type { PipelineState, VisionStage } from "@/lib/types";
 
-const STAGE_MESSAGES: Record<PipelineStage, string> = {
-  download: "Downloading video and captions from YouTube...",
-  transcribe: "Running faster-whisper-medium speech-to-text (this may take a while for long videos)...",
-  translate: "Translating source → target language via argostranslate...",
-  tts: "Synthesizing target-language speech via Chatterbox TTS...",
-  stitch: "Stitching audio, video, and subtitles with ffmpeg...",
+const STAGE_DISPLAY_NAMES: Record<VisionStage, string> = {
+  download: "Downloading...",
+  transcribe: "Transcribing...",
+  detect: "Detecting players...",
+  track: "Tracking players...",
+  ocr: "Reading jerseys...",
+  "classify-teams": "Classifying teams...",
+  "court-map": "Mapping court...",
+  render: "Rendering...",
 };
 
-const STAGE_ORDER: PipelineStage[] = ["download", "transcribe", "translate", "tts", "stitch"];
+const STAGE_ORDER: VisionStage[] = [
+  "download",
+  "transcribe",
+  "detect",
+  "track",
+  "ocr",
+  "classify-teams",
+  "court-map",
+  "render",
+];
 
 function formatElapsed(ms: number | undefined): string {
   if (ms == null) return "";
@@ -23,32 +35,32 @@ function formatElapsed(ms: number | undefined): string {
 }
 
 interface PipelineStatusBarProps {
-  pipelineState: PipelineState;
+  state: PipelineState;
 }
 
-export function PipelineStatusBar({ pipelineState }: PipelineStatusBarProps) {
+export function PipelineStatusBar({ state }: PipelineStatusBarProps) {
   const activeStage = STAGE_ORDER.find(
-    (key) => pipelineState.stages[key].status === "active"
+    (key) => state.stages[key].status === "active"
   );
-  const startedAt = activeStage ? pipelineState.stages[activeStage].started_at : undefined;
+  const startedAt = activeStage ? state.stages[activeStage].started_at : undefined;
   const elapsed = useElapsed(startedAt);
 
-  if (pipelineState.status === "idle") return null;
+  if (state.status === "idle") return null;
 
   let message: string;
-  if (pipelineState.status === "complete") {
-    message = "Pipeline complete.";
-  } else if (pipelineState.status === "error") {
+  if (state.status === "complete") {
+    message = "Analysis complete.";
+  } else if (state.status === "error") {
     const errorStage = STAGE_ORDER.find(
-      (key) => pipelineState.stages[key].status === "error"
+      (key) => state.stages[key].status === "error"
     );
-    const errorMsg = errorStage ? pipelineState.stages[errorStage].error : "Unknown error";
+    const errorMsg = errorStage ? state.stages[errorStage].error : "Unknown error";
     message = `Error in ${errorStage ?? "pipeline"}: ${errorMsg}`;
   } else if (activeStage) {
     const elapsedStr = formatElapsed(elapsed);
-    message = `${STAGE_MESSAGES[activeStage]}${elapsedStr ? ` (${elapsedStr})` : ""}`;
+    message = `${STAGE_DISPLAY_NAMES[activeStage]}${elapsedStr ? ` (${elapsedStr})` : ""}`;
   } else {
-    message = "Starting pipeline...";
+    message = "Starting analysis...";
   }
 
   return (

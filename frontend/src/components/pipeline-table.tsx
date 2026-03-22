@@ -12,39 +12,44 @@ import {
 import {
   DownloadIcon,
   MicIcon,
-  LanguagesIcon,
-  Volume2Icon,
-  ScissorsIcon,
+  ScanSearchIcon,
+  RouteIcon,
+  ScanTextIcon,
+  UsersIcon,
+  MapIcon,
+  VideoIcon,
 } from "lucide-react";
 import { useElapsed } from "@/hooks/use-elapsed";
-import type { PipelineStage, PipelineState, StageState, StudioSettings } from "@/lib/types";
-import { computeConfigEntries } from "@/lib/config-id";
+import type { VisionStage, PipelineState, StageState } from "@/lib/types";
 
 const STAGES: {
-  key: PipelineStage;
+  key: VisionStage;
   label: string;
   icon: React.ElementType;
   description: string;
 }[] = [
-  { key: "download", label: "Download", icon: DownloadIcon, description: "Fetch video + captions from YouTube" },
-  { key: "transcribe", label: "Transcribe", icon: MicIcon, description: "Speech-to-text via Whisper" },
-  { key: "translate", label: "Translate", icon: LanguagesIcon, description: "English to Spanish translation" },
-  { key: "tts", label: "TTS", icon: Volume2Icon, description: "Text-to-speech synthesis" },
-  { key: "stitch", label: "Stitch", icon: ScissorsIcon, description: "Combine audio + video + subtitles" },
+  { key: "download", label: "Download", icon: DownloadIcon, description: "Fetch video from the registry" },
+  { key: "transcribe", label: "Transcribe", icon: MicIcon, description: "Extract audio commentary via STT" },
+  { key: "detect", label: "Detect", icon: ScanSearchIcon, description: "Player detection with RF-DETR" },
+  { key: "track", label: "Track", icon: RouteIcon, description: "Multi-object tracking with ByteTrack" },
+  { key: "ocr", label: "OCR", icon: ScanTextIcon, description: "Jersey number recognition" },
+  { key: "classify-teams", label: "Classify Teams", icon: UsersIcon, description: "Team classification via color clustering" },
+  { key: "court-map", label: "Court Map", icon: MapIcon, description: "Homography-based bird's-eye mapping" },
+  { key: "render", label: "Render", icon: VideoIcon, description: "Annotate and render output video" },
 ];
 
 function statusBadge(status: string) {
   switch (status) {
     case "active":
-      return <Badge variant="secondary">Running</Badge>;
+      return <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Running</Badge>;
     case "complete":
-      return <Badge variant="default">Done</Badge>;
+      return <Badge variant="default" className="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">Done</Badge>;
     case "skipped":
-      return <Badge variant="outline">Skipped</Badge>;
+      return <Badge variant="outline" className="text-muted-foreground">Skipped</Badge>;
     case "error":
       return <Badge variant="destructive">Error</Badge>;
     default:
-      return <Badge variant="outline">Pending</Badge>;
+      return <Badge variant="outline" className="text-muted-foreground/50">Pending</Badge>;
   }
 }
 
@@ -54,27 +59,24 @@ function formatDuration(ms: number | undefined): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** Individual row — needs its own component so it can call useElapsed. */
 function StageRow({
   stageKey,
   label,
   icon: Icon,
   description,
   stage,
-  config,
 }: {
   stageKey: string;
   label: string;
   icon: React.ElementType;
   description: string;
   stage: StageState;
-  config: string;
 }) {
   const elapsed = useElapsed(stage.status === "active" ? stage.started_at : undefined);
   const duration = stage.status === "active" ? elapsed : stage.duration_ms;
 
   return (
-    <TableRow key={stageKey}>
+    <TableRow>
       <TableCell className="font-medium">
         <div className="flex items-center gap-2">
           <Icon className="size-4 text-muted-foreground" />
@@ -84,45 +86,15 @@ function StageRow({
       <TableCell className="text-muted-foreground">{description}</TableCell>
       <TableCell>{statusBadge(stage.status)}</TableCell>
       <TableCell className="text-right tabular-nums">{formatDuration(duration)}</TableCell>
-      <TableCell className="text-muted-foreground text-xs">{config}</TableCell>
     </TableRow>
   );
 }
 
 interface PipelineTableProps {
-  pipelineState: PipelineState;
-  settings: StudioSettings;
+  state: PipelineState;
 }
 
-export function PipelineTable({ pipelineState, settings }: PipelineTableProps) {
-  const configEntries = computeConfigEntries(settings);
-  const configLabel = configEntries.length === 1
-    ? configEntries[0].id
-    : configEntries.map((c) => c.id).join(", ");
-
-  function getConfig(stage: PipelineStage): string {
-    switch (stage) {
-      case "download":
-        return pipelineState.videoId ?? "--";
-      case "transcribe":
-        return "faster-whisper-medium";
-      case "translate":
-        return "argostranslate";
-      case "tts": {
-        const parts: string[] = [];
-        if (settings.dubbing.includes("aligned")) parts.push("Aligned");
-        else parts.push("Baseline");
-        if (settings.voiceCloning.length > 0) parts.push(settings.voiceCloning.join(", "));
-        if (settings.diarization.length > 0) parts.push(settings.diarization.join(", "));
-        return parts.join(" + ") || "Chatterbox";
-      }
-      case "stitch":
-        return "ffmpeg + moviepy";
-      default:
-        return "--";
-    }
-  }
-
+export function PipelineTable({ state }: PipelineTableProps) {
   return (
     <div className="px-4 lg:px-6">
       <Table>
@@ -130,12 +102,8 @@ export function PipelineTable({ pipelineState, settings }: PipelineTableProps) {
           <TableRow>
             <TableHead className="w-[180px]">Stage</TableHead>
             <TableHead>Description</TableHead>
-            <TableHead className="w-[100px]">Status</TableHead>
+            <TableHead className="w-[110px]">Status</TableHead>
             <TableHead className="w-[100px] text-right">Duration</TableHead>
-            <TableHead>
-              Configuration{" "}
-              <code className="text-[10px] text-muted-foreground font-mono">{configLabel}</code>
-            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -146,8 +114,7 @@ export function PipelineTable({ pipelineState, settings }: PipelineTableProps) {
               label={label}
               icon={icon}
               description={description}
-              stage={pipelineState.stages[key]}
-              config={getConfig(key)}
+              stage={state.stages[key]}
             />
           ))}
         </TableBody>
