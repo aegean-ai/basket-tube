@@ -101,8 +101,9 @@ export function usePipeline() {
       dispatch({ type: "START", videoId });
 
       try {
-        // 1. Download
-        await runStage(dispatch, "download", () => api.downloadVideo(videoUrl));
+        // 1. Download (send video ID for local files, URL for YouTube)
+        const downloadUrl = videoUrl === "local" ? videoId : videoUrl;
+        await runStage(dispatch, "download", () => api.downloadVideo(downloadUrl));
 
         // 2. Transcribe
         await runStage(dispatch, "transcribe", () => api.transcribeVideo(videoId));
