@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     def dubbed_captions_dir(self) -> Path:
         return self.data_dir / "dubbed_captions"
 
+    @property
+    def analysis_dir(self) -> Path:
+        return self.data_dir / "analysis"
+
     # S3 storage
     s3_bucket: str = ""
     s3_endpoint_url: str = ""
@@ -85,6 +89,10 @@ class Settings(BaseSettings):
     # External service URLs
     chatterbox_api_url: str = "http://localhost:8020"
     whisper_api_url: str = "http://localhost:8000"
+
+    # GPU inference service URLs
+    inference_roboflow_url: str = "http://localhost:8091"
+    inference_vision_url: str = "http://localhost:8092"
 
     # HuggingFace token for pyannote speaker diarization model
     hf_token: str = ""

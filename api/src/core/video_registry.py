@@ -56,3 +56,7 @@ def resolve_title(video_id: str) -> str | None:
     """Return the title stem for a video ID, or None if not registered."""
     entry = get_video(video_id)
     return entry.title if entry else None
+
+
+# Alias: spec uses resolve_stem, existing code uses resolve_title
+resolve_stem = resolve_title
