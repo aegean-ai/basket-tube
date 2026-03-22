@@ -1,91 +1,89 @@
-import type {
-  DownloadResponse,
-  TranscribeResponse,
-  TranslateResponse,
-  TTSResponse,
-  StitchResponse,
-} from "./types";
+// src/lib/api.ts
+
+const API_BASE = "";
 
 class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  status: number;
+  constructor(message: string, status: number) {
     super(message);
-    this.name = "ApiError";
+    this.status = status;
   }
 }
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "Unknown error");
-    throw new ApiError(res.status, text);
-  }
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
   return res.json();
 }
 
-export async function downloadVideo(url: string): Promise<DownloadResponse> {
-  return fetchJson<DownloadResponse>("/api/download", {
-    method: "POST",
-    body: JSON.stringify({ url }),
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`);
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
+  return res.json();
+}
+
+async function put<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
+  return res.json();
 }
 
-export async function transcribeVideo(videoId: string, useYoutubeCaptions = true): Promise<TranscribeResponse> {
-  const params = useYoutubeCaptions ? "" : "?use_youtube_captions=false";
-  return fetchJson<TranscribeResponse>(`/api/transcribe/${videoId}${params}`, {
-    method: "POST",
-  });
-}
+// Video + STT
+export const downloadVideo = (url: string) =>
+  post<import("./types").DownloadResponse>("/api/download", { url });
 
-export async function translateVideo(
-  videoId: string,
-  targetLanguage = "es"
-): Promise<TranslateResponse> {
-  return fetchJson<TranslateResponse>(
-    `/api/translate/${videoId}?target_language=${targetLanguage}`,
-    { method: "POST" }
+export const transcribeVideo = (videoId: string, useYoutubeCaptions = true) =>
+  post<import("./types").TranscribeResponse>(
+    `/api/transcribe/${videoId}?use_youtube_captions=${useYoutubeCaptions}`
   );
-}
 
-export async function synthesizeSpeech(
-  videoId: string,
-  config: string,
-  alignment: boolean = false
-): Promise<TTSResponse> {
-  return fetchJson<TTSResponse>(
-    `/api/tts/${videoId}?config=${config}&alignment=${alignment}`,
-    { method: "POST" }
+// Settings
+export const getSettings = (videoId: string) =>
+  get<import("./types").AnalysisSettings>(`/api/settings/${videoId}`);
+
+export const saveSettings = (videoId: string, settings: import("./types").AnalysisSettings) =>
+  put<import("./types").AnalysisSettings>(`/api/settings/${videoId}`, settings);
+
+// Vision pipeline
+export const detectPlayers = (videoId: string, params?: object) =>
+  post<import("./types").DetectResponse>(`/api/vision/detect/${videoId}`, params);
+
+export const trackPlayers = (videoId: string, body: { det_config_key: string }) =>
+  post<import("./types").TrackResponse>(`/api/vision/track/${videoId}`, body);
+
+export const classifyTeams = (videoId: string, body: { det_config_key: string; stride?: number; crop_scale?: number }) =>
+  post<import("./types").ClassifyTeamsResponse>(`/api/vision/classify-teams/${videoId}`, body);
+
+export const ocrJerseys = (videoId: string, body: { track_config_key: string; ocr_interval?: number }) =>
+  post<import("./types").OCRResponse>(`/api/vision/ocr/${videoId}`, body);
+
+export const mapCourt = (videoId: string, body: { det_config_key: string }) =>
+  post<import("./types").CourtMapResponse>(`/api/vision/court-map/${videoId}`, body);
+
+export const renderVideo = (videoId: string, body: object) =>
+  post<import("./types").RenderResponse>(`/api/vision/render/${videoId}`, body);
+
+export const getPipelineStatus = (videoId: string) =>
+  get<import("./types").PipelineStatusResponse>(`/api/vision/status/${videoId}`);
+
+// Artifacts
+export const getArtifact = (stage: string, videoId: string, configKey: string) =>
+  get<unknown>(`/api/vision/artifacts/${stage}/${videoId}?config_key=${configKey}`);
+
+// Captions
+export const buildTimeline = (videoId: string) =>
+  post<{ video_id: string; config_key: string; n_segments: number; source: string; skipped: boolean }>(
+    `/api/captions/timeline/${videoId}`
   );
-}
 
-export async function stitchVideo(
-  videoId: string,
-  config: string
-): Promise<StitchResponse> {
-  return fetchJson<StitchResponse>(
-    `/api/stitch/${videoId}?config=${config}`,
-    { method: "POST" }
-  );
-}
-
-export function getVideoUrl(videoId: string, config: string): string {
-  return `/api/video/${videoId}?config=${config}`;
-}
-
-export function getOriginalVideoUrl(videoId: string): string {
-  return `/api/video/${videoId}/original`;
-}
-
-export function getAudioUrl(videoId: string, config: string): string {
-  return `/api/audio/${videoId}?config=${config}`;
-}
-
-export function getCaptionsUrl(videoId: string): string {
-  return `/api/captions/${videoId}`;
-}
-
-export function getOriginalCaptionsUrl(videoId: string): string {
-  return `/api/captions/${videoId}/original`;
-}
+// URL helpers
+export const getVideoUrl = (videoId: string) =>
+  `/api/video/${videoId}/original`;
