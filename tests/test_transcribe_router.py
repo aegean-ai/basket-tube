@@ -1,7 +1,6 @@
-"""Tests for POST /api/transcribe/{video_id} endpoint (issue 58f)."""
+"""Tests for POST /api/transcribe/{video_id} endpoint."""
 
 import json
-import pathlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,7 +9,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def ui_dir(tmp_path):
-    """Provide a temporary ui directory tree."""
+    """Provide a temporary directory tree."""
     (tmp_path / "videos").mkdir()
     (tmp_path / "transcriptions" / "whisper").mkdir(parents=True)
     return tmp_path
@@ -18,25 +17,17 @@ def ui_dir(tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch, ui_dir):
-    """Test client with Whisper model stubbed."""
-    from unittest.mock import MagicMock
-    monkeypatch.setattr("whisper.load_model", lambda *a, **kw: MagicMock())
-
+    """Test client with settings patched to tmp dir."""
     from api.src.core.config import settings
     monkeypatch.setattr(settings, "data_dir", ui_dir)
 
     # Mock resolve_title to return "Test Title" for any video ID
-    monkeypatch.setattr(
-        "api.src.core.dependencies.resolve_title",
-        lambda vid: "Test Title",
-    )
     monkeypatch.setattr(
         "api.src.routers.transcribe.resolve_title",
         lambda vid: "Test Title",
     )
 
     from api.src.main import app
-
     with TestClient(app) as c:
         yield c
 
@@ -53,24 +44,11 @@ def _make_whisper_result():
 
 def test_transcribe_returns_segments(client, monkeypatch, ui_dir):
     """POST /api/transcribe/{video_id} returns structured segments."""
-    # Create a fake video file matching the expected pattern
     (ui_dir / "videos" / "Test Title.mp4").write_bytes(b"fake-video")
 
-    # Mock title_for_video_id on the TranscriptionService class
-    monkeypatch.setattr(
-        "api.src.services.transcription_service.TranscriptionService.title_for_video_id",
-        lambda self_or_vid, vid_or_dir, search_dir=None: "Test Title",
-    )
+    with patch("api.src.services.whisper_service.transcribe", return_value=_make_whisper_result()):
+        resp = client.post("/api/transcribe/G3Eup4mfJdA?use_youtube_captions=false")
 
-    # Set a mock Whisper model in app state (lifespan sets it to None)
-    from api.src.main import app
-    from unittest.mock import MagicMock
-
-    mock_model = MagicMock()
-    mock_model.transcribe = MagicMock(return_value=_make_whisper_result())
-    app.state._whisper_model = mock_model
-
-    resp = client.post("/api/transcribe/G3Eup4mfJdA")
     assert resp.status_code == 200
     body = resp.json()
     assert body["video_id"] == "G3Eup4mfJdA"
@@ -83,19 +61,8 @@ def test_transcribe_saves_json(client, monkeypatch, ui_dir):
     """Transcription result is persisted to transcriptions/whisper/{title}.json."""
     (ui_dir / "videos" / "Test Title.mp4").write_bytes(b"fake-video")
 
-    monkeypatch.setattr(
-        "api.src.services.transcription_service.TranscriptionService.title_for_video_id",
-        lambda self_or_vid, vid_or_dir, search_dir=None: "Test Title",
-    )
-
-    from api.src.main import app
-    from unittest.mock import MagicMock
-
-    mock_model = MagicMock()
-    mock_model.transcribe = MagicMock(return_value=_make_whisper_result())
-    app.state._whisper_model = mock_model
-
-    client.post("/api/transcribe/G3Eup4mfJdA")
+    with patch("api.src.services.whisper_service.transcribe", return_value=_make_whisper_result()):
+        client.post("/api/transcribe/G3Eup4mfJdA?use_youtube_captions=false")
 
     saved = ui_dir / "transcriptions" / "whisper" / "Test Title.json"
     assert saved.exists()
@@ -105,24 +72,14 @@ def test_transcribe_saves_json(client, monkeypatch, ui_dir):
 
 def test_transcribe_skips_if_cached(client, monkeypatch, ui_dir):
     """If transcription JSON already exists, don't re-run Whisper."""
-    monkeypatch.setattr(
-        "api.src.services.transcription_service.TranscriptionService.title_for_video_id",
-        lambda self_or_vid, vid_or_dir, search_dir=None: "Test Title",
-    )
-
-    # Pre-populate cached transcription
     cached = ui_dir / "transcriptions" / "whisper" / "Test Title.json"
     cached.write_text(json.dumps(_make_whisper_result()))
 
-    from api.src.main import app
-    from unittest.mock import MagicMock
+    with patch("api.src.services.whisper_service.transcribe") as mock_transcribe:
+        resp = client.post("/api/transcribe/G3Eup4mfJdA")
 
-    mock_model = MagicMock()
-    app.state._whisper_model = mock_model
-
-    resp = client.post("/api/transcribe/G3Eup4mfJdA")
     assert resp.status_code == 200
-    mock_model.transcribe.assert_not_called()
+    mock_transcribe.assert_not_called()
 
 
 def test_transcribe_video_not_found(client, monkeypatch, ui_dir):

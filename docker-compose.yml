@@ -14,11 +14,38 @@ services:
     command: ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       - FW_INFERENCE_GPU_URL=http://localhost:8090
+      - FW_WHISPER_API_URL=http://localhost:8000
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./video_registry.yml:/app/video_registry.yml:ro
       - ./api:/app/api
     # Binds to :8080
+
+  # ── STT (Whisper) — GPU ───────────────────────────────────────────
+  whisper:
+    container_name: basket-tube-whisper
+    profiles: [nvidia]
+    image: ghcr.io/speaches-ai/speaches:latest-cuda-12.6.3
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-medium
+    volumes:
+      - whisper-cache:/home/ubuntu/.cache/huggingface/hub
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://0.0.0.0:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Binds to :8000
 
   # ── GPU inference (all vision models) ────────────────────────────
   inference:
@@ -79,4 +106,5 @@ services:
     # Binds to :8888
 
 volumes:
+  whisper-cache:
   notebook-cache:
