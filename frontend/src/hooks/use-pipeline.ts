@@ -139,7 +139,9 @@ export function usePipeline() {
     }
   }, []);
 
-  const { connected } = useSSE(state.videoId, { onEvent: handleSSE });
+  // Only connect SSE while pipeline is running — prevents reconnect loop after completion
+  const sseVideoId = state.status === "running" ? state.videoId : undefined;
+  const { connected } = useSSE(sseVideoId, { onEvent: handleSSE });
 
   const runPipeline = useCallback(
     async (videoId: string, _videoUrl: string, settings: AnalysisSettings, fromStage?: VisionStage) => {
