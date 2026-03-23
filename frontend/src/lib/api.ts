@@ -101,3 +101,6 @@ export const cancelPipeline = (videoId: string) =>
 
 export const deleteArtifact = (stage: string, videoId: string, configKey: string) =>
   del(`/api/vision/artifacts/${stage}/${videoId}?config_key=${configKey}`);
+
+export const checkStaleness = (videoId: string, settings: import("./types").AnalysisSettings) =>
+  post<import("./types").StalenessMap>(`/api/pipeline/staleness/${videoId}`, { settings });

@@ -23,7 +23,7 @@ import {
   RotateCcwIcon,
 } from "lucide-react";
 import { useElapsed } from "@/hooks/use-elapsed";
-import type { VisionStage, PipelineState, StageState } from "@/lib/types";
+import type { VisionStage, PipelineState, StageState, StalenessMap } from "@/lib/types";
 import { isStageReady, getDownstream } from "@/lib/stage-deps";
 
 const STAGES: {
@@ -42,7 +42,10 @@ const STAGES: {
   { key: "render", label: "Render", icon: VideoIcon, description: "Annotate and render output video" },
 ];
 
-function statusBadge(status: string) {
+function statusBadge(status: string, isStale?: boolean) {
+  if (isStale && (status === "complete" || status === "skipped")) {
+    return <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Outdated</Badge>;
+  }
   switch (status) {
     case "active":
       return <Badge variant="secondary" className="bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Running</Badge>;
@@ -70,6 +73,7 @@ function StageRow({
   description,
   stage,
   allStages,
+  isStale,
   onRunStage,
   onRerunStage,
 }: {
@@ -79,6 +83,7 @@ function StageRow({
   description: string;
   stage: StageState;
   allStages: PipelineState["stages"];
+  isStale?: boolean;
   onRunStage?: (stage: VisionStage) => void;
   onRerunStage?: (stage: VisionStage) => void;
 }) {
@@ -108,7 +113,7 @@ function StageRow({
     actionButton = null;
   } else if (stage.status === "complete") {
     actionButton = (
-      <Button variant="ghost" size="sm" onClick={() => onRerunStage?.(stageKey)}>
+      <Button variant={isStale ? "outline" : "ghost"} size="sm" onClick={() => onRerunStage?.(stageKey)}>
         <RotateCcwIcon className="size-3.5 mr-1" />
         Re-run
       </Button>
@@ -138,7 +143,7 @@ function StageRow({
         </div>
       </TableCell>
       <TableCell className="text-muted-foreground">{description}</TableCell>
-      <TableCell>{statusBadge(stage.status)}</TableCell>
+      <TableCell>{statusBadge(stage.status, isStale)}</TableCell>
       <TableCell className="text-right tabular-nums">
         {stage.status === "active" && stage.progress != null ? (
           <div className="flex items-center gap-2 justify-end">
@@ -161,11 +166,12 @@ function StageRow({
 
 interface PipelineTableProps {
   state: PipelineState;
+  staleness?: StalenessMap;
   onRunStage?: (stage: VisionStage) => void;
   onRerunStage?: (stage: VisionStage) => void;
 }
 
-export function PipelineTable({ state, onRunStage, onRerunStage }: PipelineTableProps) {
+export function PipelineTable({ state, staleness, onRunStage, onRerunStage }: PipelineTableProps) {
   return (
     <div className="px-4 lg:px-6">
       <Table>
@@ -188,6 +194,7 @@ export function PipelineTable({ state, onRunStage, onRerunStage }: PipelineTable
               description={description}
               stage={state.stages[key]}
               allStages={state.stages}
+              isStale={staleness?.[key]?.stale}
               onRunStage={onRunStage}
               onRerunStage={onRerunStage}
             />

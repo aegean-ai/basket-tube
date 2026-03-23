@@ -512,6 +512,65 @@ export const deleteArtifact = (stage: string, videoId: string, configKey: string
 | `frontend/src/components/settings-dialog.tsx` | Complete rewrite: two-column layout with per-stage settings panels |
 | `frontend/src/contexts/analysis-settings-context.tsx` | Update to stage-keyed settings model, migration from flat `advanced` |
 
+## Staleness Detection
+
+When the user changes stage settings in the UI, existing cached artifacts may no longer match the current configuration. The UI must inform the user which stages are **outdated** and need re-running.
+
+### Backend: Staleness Check Endpoint
+
+```
+POST /api/pipeline/staleness/{video_id}
+Body: { "settings": AnalysisSettings }
+Response: {
+  "detect": {"stale": false},
+  "track": {"stale": false},
+  "ocr": {"stale": true, "reason": "ocr_interval changed: 5 → 10"},
+  "classify-teams": {"stale": false},
+  "court-map": {"stale": false}
+}
+```
+
+For each stage:
+1. Compute the `config_key` from the current UI settings using `artifacts.config_key()` with the same param dict the GPU service uses
+2. Find the existing `config.resolved.json` for that stage (if any)
+3. Compare config keys — if they differ, the stage is `stale`
+4. Cascade: if a stage is stale, all downstream stages are also stale (even if their own params haven't changed, their upstream input has changed)
+
+The param dicts must match exactly what the GPU service uses for config_key computation:
+- **detect:** `{model_id, confidence, iou_threshold}`
+- **track:** `{tracker: "bytetrack", det_config_key}`
+- **classify-teams:** `{stride, crop_scale, det_config_key}`
+- **court-map:** `{model_id, keypoint_confidence, anchor_confidence, det_config_key}`
+- **ocr:** `{model_id, n_consecutive, ocr_interval, track_config_key}`
+
+### Frontend: Outdated Badge
+
+In `PipelineTable`, when a stage is `complete` but stale:
+- Replace the green "Done" badge with an amber **"Outdated"** badge
+- The "Re-run" button becomes primary (instead of ghost)
+- Tooltip shows what changed
+
+### When to Check
+
+The frontend calls the staleness endpoint:
+1. On settings change (debounced 500ms after the user stops editing)
+2. On initial load (to detect drift from previous runs)
+3. After a pipeline run completes (to confirm freshness)
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `api/src/routers/pipeline.py` | Add `POST /api/pipeline/staleness/{video_id}` endpoint |
+| `frontend/src/hooks/use-staleness.ts` | Hook that calls staleness endpoint on settings change |
+
+### Modified Files
+
+| File | Change |
+|------|--------|
+| `frontend/src/lib/types.ts` | Add `StalenessMap` type |
+| `frontend/src/components/pipeline-table.tsx` | Show "Outdated" badge, adjust Re-run button prominence |
+
 ## Migration
 
 The backend settings endpoint detects the old flat `advanced` format and migrates it to the new `stages` structure on read. The old format is still accepted on write for backwards compatibility during the transition.
