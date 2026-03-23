@@ -18,7 +18,7 @@ export type VisionStage =
   | "court-map"
   | "render";
 
-export type StageStatus = "pending" | "active" | "complete" | "skipped" | "error";
+export type StageStatus = "pending" | "ready" | "active" | "complete" | "skipped" | "error";
 
 export interface StageState {
   status: StageStatus;
@@ -27,6 +27,9 @@ export interface StageState {
   error?: string;
   duration_ms?: number;
   started_at?: number;
+  progress?: number;
+  frame?: number;
+  total_frames?: number;
 }
 
 export interface PipelineState {
@@ -121,17 +124,54 @@ export interface GameContext {
   roster: Record<string, string>; // jersey# -> player name
 }
 
-export interface AdvancedSettings {
+export interface TranscribeSettings {
+  model: string;
+  use_youtube_captions: boolean;
+}
+
+export interface DetectSettings {
+  model_id: string;
   confidence: number;
   iou_threshold: number;
+}
+
+export interface TrackSettings {
+  iou_threshold: number;
+  track_activation_threshold: number;
+  lost_track_buffer: number;
+}
+
+export interface OCRSettings {
+  model_id: string;
   ocr_interval: number;
+  n_consecutive: number;
+}
+
+export interface TeamsSettings {
+  embedding_model: string;
+  n_teams: number;
   crop_scale: number;
   stride: number;
 }
 
+export interface CourtMapSettings {
+  model_id: string;
+  keypoint_confidence: number;
+  anchor_confidence: number;
+}
+
+export interface StageSettings {
+  transcribe: TranscribeSettings;
+  detect: DetectSettings;
+  track: TrackSettings;
+  ocr: OCRSettings;
+  teams: TeamsSettings;
+  court_map: CourtMapSettings;
+}
+
 export interface AnalysisSettings {
   game_context: GameContext;
-  advanced: AdvancedSettings;
+  stages: StageSettings;
 }
 
 // Chat

@@ -87,3 +87,17 @@ export const buildTimeline = (videoId: string) =>
 // URL helpers
 export const getVideoUrl = (videoId: string) =>
   `/api/video/${videoId}/original`;
+
+async function del(path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(await res.text(), res.status);
+}
+
+export const runFullPipeline = (videoId: string, settings: import("./types").AnalysisSettings) =>
+  post<{ sse_url: string }>(`/api/pipeline/run/${videoId}`, { settings });
+
+export const cancelPipeline = (videoId: string) =>
+  post<{ cancelled_stages: string[] }>(`/api/pipeline/cancel/${videoId}`);
+
+export const deleteArtifact = (stage: string, videoId: string, configKey: string) =>
+  del(`/api/vision/artifacts/${stage}/${videoId}?config_key=${configKey}`);
