@@ -53,6 +53,12 @@ export function useSSE(videoId: string | undefined, { onEvent }: UseSSEOptions) 
           const data = JSON.parse(e.data) as SSEEvent;
           data.event = type;
           onEventRef.current(data);
+
+          // Close connection when pipeline finishes — prevents reconnect loop
+          if (type === "pipeline_completed" || type === "pipeline_error") {
+            es.close();
+            setConnected(false);
+          }
         } catch { /* ignore parse errors */ }
       });
     }
