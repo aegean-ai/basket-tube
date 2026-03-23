@@ -71,6 +71,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu
+      args:
+        USER_UID: "${UID:-1000}"
+        USER_GID: "${GID:-1000}"
     restart: unless-stopped
     network_mode: host
     shm_size: "8gb"

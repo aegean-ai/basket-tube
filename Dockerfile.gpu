@@ -1,9 +1,16 @@
 FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
 
+ARG USERNAME=appuser
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
     apt-get -y install --no-install-recommends \
     curl git ffmpeg build-essential libgl1-mesa-glx libglib2.0-0 \
     && rm -rf /var/cache/apt && apt-get clean
+
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $USERNAME
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
@@ -15,12 +22,12 @@ RUN pip install --no-cache-dir sam2 decord
 WORKDIR /app
 
 # Shared utilities from api/src/ (artifacts, video_registry)
-COPY api/__init__.py api/
-COPY api/src/__init__.py api/src/
-COPY api/src/artifacts.py api/src/
-COPY api/src/video_registry.py api/src/
-COPY basket_tube/ basket_tube/
-COPY pyproject.toml ./
+COPY --chown=$USERNAME:$USERNAME api/__init__.py api/
+COPY --chown=$USERNAME:$USERNAME api/src/__init__.py api/src/
+COPY --chown=$USERNAME:$USERNAME api/src/artifacts.py api/src/
+COPY --chown=$USERNAME:$USERNAME api/src/video_registry.py api/src/
+COPY --chown=$USERNAME:$USERNAME basket_tube/ basket_tube/
+COPY --chown=$USERNAME:$USERNAME pyproject.toml ./
 
 # Install sports first (has numpy<2 constraint that conflicts with inference-gpu>=1.1)
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -36,6 +43,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     "inference-gpu[transformers]>=1.1"
 
 ENV ONNXRUNTIME_EXECUTION_PROVIDERS="[CUDAExecutionProvider]"
+
+# Ensure /app and /cache are owned by appuser
+RUN chown -R $USERNAME:$USERNAME /app && \
+    mkdir -p /cache && chown -R $USERNAME:$USERNAME /cache
+
+USER $USERNAME
 
 EXPOSE 8090
 CMD ["uvicorn", "basket_tube.inference.main:app", "--host", "0.0.0.0", "--port", "8090"]
