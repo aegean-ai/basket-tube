@@ -22,13 +22,18 @@ COPY api/src/video_registry.py api/src/
 COPY basket_tube/ basket_tube/
 COPY pyproject.toml ./
 
+# Install sports first (has numpy<2 constraint that conflicts with inference-gpu>=1.1)
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
-    "inference-gpu[transformers]>=1.1" "supervision>=0.25" \
     "sports @ git+https://github.com/roboflow/sports.git@feat/basketball" \
-    transformers num2words opencv-python-headless tqdm \
+    opencv-python-headless tqdm num2words \
     fastapi uvicorn pyyaml \
     jupyterlab ipywidgets
+
+# Install inference-gpu with transformers support (overrides numpy constraint)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    pip install --no-cache-dir \
+    "inference-gpu[transformers]>=1.1"
 
 ENV ONNXRUNTIME_EXECUTION_PROVIDERS="[CUDAExecutionProvider]"
 
