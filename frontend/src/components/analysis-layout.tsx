@@ -150,6 +150,9 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
         <div className="flex flex-1 flex-col gap-4 p-4">
           <PipelineStatusBar state={state} />
 
+          {/* Summary cards — always visible */}
+          <PipelineCards state={state} />
+
           {/* Video player area */}
           <div className="aspect-video w-full rounded-lg border bg-card overflow-hidden">
             <VideoCanvas videoId={selectedVideoId} />
@@ -160,15 +163,12 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
 
           {/* Analytics panel — selected from sidebar */}
           {analyticsView === "pipeline" && (
-            <>
-              <PipelineCards state={state} />
-              <PipelineTable
-                state={state}
-                staleness={staleness}
-                onRunStage={handleRunStage}
-                onRerunStage={handleRerunStage}
-              />
-            </>
+            <PipelineTable
+              state={state}
+              staleness={staleness}
+              onRunStage={handleRunStage}
+              onRerunStage={handleRerunStage}
+            />
           )}
           {analyticsView === "players" && (
             <PlayersTable
