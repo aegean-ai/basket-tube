@@ -24,7 +24,7 @@ COPY pyproject.toml ./
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system \
-    "inference-gpu" "supervision==0.27.0rc4" \
+    "inference-gpu[transformers]" "supervision==0.27.0rc4" \
     "sports @ git+https://github.com/roboflow/sports.git@feat/basketball" \
     transformers num2words opencv-python-headless tqdm \
     fastapi uvicorn pyyaml \

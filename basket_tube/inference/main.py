@@ -335,6 +335,8 @@ async def ocr(req: InferenceRequest):
 
                 n_ocr_frames += 1
                 frame_h, frame_w = frame.shape[:2]
+                frame_tids = []
+                frame_numbers = []
                 for tid, box in zip(tracker_ids, xyxy_list):
                     x1, y1, x2, y2 = [int(c) for c in box]
                     x1, y1 = max(0, x1 - 10), max(0, y1 - 10)
@@ -344,16 +346,19 @@ async def ocr(req: InferenceRequest):
                         continue
                     crop_resized = cv2.resize(crop, (224, 224))
                     number_str = run_ocr(model, crop_resized, OCR_PROMPT)
-                    number_validator.update({tid: number_str})
+                    frame_tids.append(tid)
+                    frame_numbers.append(number_str)
                     n_ocr_reads += 1
+                if frame_tids:
+                    number_validator.update(frame_tids, frame_numbers)
 
                 if n_ocr_frames % 50 == 0:
-                    validated_so_far = number_validator.get_all_validated() if hasattr(number_validator, "get_all_validated") else {}
+                    validated_so_far = number_validator.validated_dict()
                     _log_info("ocr.progress frame={frame} ocr_frames={n_ocr} reads={reads} validated={n_val}",
                               frame=idx, n_ocr=n_ocr_frames, reads=n_ocr_reads, n_val=len(validated_so_far))
 
             players = {}
-            validated = number_validator.get_all_validated() if hasattr(number_validator, "get_all_validated") else {}
+            validated = number_validator.validated_dict()
             for tid, num in validated.items():
                 players[str(tid)] = str(num)
 

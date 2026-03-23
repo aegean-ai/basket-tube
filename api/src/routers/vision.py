@@ -123,11 +123,13 @@ async def detect(video_id: str, req: DetectRequest = DetectRequest()):
     sidecar = status_path_for(out)
 
     if out.exists():
+        import json as json_mod
+        data = json_mod.loads(out.read_text())
         return DetectResponse(
             video_id=video_id,
             config_key=cfg_key,
-            n_frames=0,
-            n_detections=0,
+            n_frames=data.get("n_frames", 0),
+            n_detections=data.get("n_detections", 0),
             skipped=True,
         )
 
@@ -234,10 +236,12 @@ async def classify_teams(video_id: str, req: ClassifyTeamsRequest):
     sidecar = status_path_for(out)
 
     if out.exists():
+        import json as json_mod
+        data = json_mod.loads(out.read_text())
         return ClassifyTeamsResponse(
             video_id=video_id,
             config_key=cfg_key,
-            palette={},
+            palette=data.get("palette", {}),
             skipped=True,
         )
 
@@ -290,10 +294,12 @@ async def ocr(video_id: str, req: OCRRequest):
     sidecar = status_path_for(out)
 
     if out.exists():
+        import json as json_mod
+        data = json_mod.loads(out.read_text())
         return OCRResponse(
             video_id=video_id,
             config_key=cfg_key,
-            players={},
+            players=data.get("players", {}),
             skipped=True,
         )
 
@@ -346,10 +352,12 @@ async def court_map(video_id: str, req: CourtMapRequest):
     sidecar = status_path_for(out)
 
     if out.exists():
+        import json as json_mod
+        data = json_mod.loads(out.read_text())
         return CourtMapResponse(
             video_id=video_id,
             config_key=cfg_key,
-            n_frames_mapped=0,
+            n_frames_mapped=data.get("n_frames_mapped", 0),
             skipped=True,
         )
 
