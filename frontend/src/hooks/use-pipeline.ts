@@ -142,10 +142,10 @@ export function usePipeline() {
   const { connected } = useSSE(state.videoId, { onEvent: handleSSE });
 
   const runPipeline = useCallback(
-    async (videoId: string, _videoUrl: string, settings: AnalysisSettings) => {
+    async (videoId: string, _videoUrl: string, settings: AnalysisSettings, fromStage?: VisionStage) => {
       dispatch({ type: "START", videoId });
       try {
-        await api.runFullPipeline(videoId, settings);
+        await api.runFullPipeline(videoId, settings, fromStage);
       } catch (err) {
         dispatch({ type: "STAGE_ERROR", stage: "download", error: err instanceof Error ? err.message : String(err) });
       }
@@ -153,28 +153,25 @@ export function usePipeline() {
     [],
   );
 
-  const runStage = useCallback(
-    async (stage: VisionStage, videoId: string, params: object) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stageEndpoints: Record<string, (id: string, p: any) => Promise<unknown>> = {
-        detect: api.detectPlayers,
-        track: api.trackPlayers,
-        ocr: api.ocrJerseys,
-        "classify-teams": api.classifyTeams,
-        "court-map": api.mapCourt,
+  const rerunStage = useCallback(
+    async (stage: VisionStage, videoId: string, configKey: string, settings: AnalysisSettings) => {
+      // Delete artifact for this stage, then run pipeline from this stage
+      const stageToArtifactDir: Record<string, string> = {
+        detect: "detections", track: "tracks", ocr: "jerseys",
+        "classify-teams": "teams", "court-map": "court",
       };
-      const fn = stageEndpoints[stage];
-      if (fn) await fn(videoId, params);
+      const artifactDir = stageToArtifactDir[stage];
+      if (artifactDir && configKey) {
+        await api.deleteArtifact(artifactDir, videoId, configKey);
+      }
+      dispatch({ type: "START", videoId });
+      try {
+        await api.runFullPipeline(videoId, settings, stage);
+      } catch (err) {
+        dispatch({ type: "STAGE_ERROR", stage, error: err instanceof Error ? err.message : String(err) });
+      }
     },
     [],
-  );
-
-  const rerunStage = useCallback(
-    async (stage: VisionStage, videoId: string, configKey: string, params: object) => {
-      await api.deleteArtifact(stage, videoId, configKey);
-      await runStage(stage, videoId, params);
-    },
-    [runStage],
   );
 
   const cancelPipeline = useCallback(async () => {
@@ -183,5 +180,5 @@ export function usePipeline() {
 
   const reset = useCallback(() => dispatch({ type: "RESET" }), []);
 
-  return { state, runPipeline, runStage, rerunStage, cancelPipeline, reset, connected };
+  return { state, runPipeline, rerunStage, cancelPipeline, reset, connected };
 }
