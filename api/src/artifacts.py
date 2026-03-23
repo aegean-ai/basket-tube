@@ -160,3 +160,16 @@ def check_stale(sidecar: Path, timeout_s: float = 600.0) -> dict:
         return {"status": "pending"}
 
     return current
+
+
+def delete_artifact(data_dir: Path, stage: str, cfg_key: str, stem: str) -> None:
+    """Delete artifact, sidecar, and progress file for a stage."""
+    art = artifact_path(data_dir, stage, cfg_key, stem)
+    sidecar = status_path_for(art)
+    progress = art.parent / "_progress.json"
+
+    for f in (art, sidecar, progress):
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
