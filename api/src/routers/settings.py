@@ -1,10 +1,10 @@
 """Settings persistence — GET/PUT per-video analysis settings."""
 import json
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 from api.src.artifacts import atomic_write_json
 from api.src.config import settings
-from api.src.schemas.settings import AnalysisSettings
+from api.src.schemas.settings import AnalysisSettings, migrate_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -19,13 +19,14 @@ async def get_settings(video_id: str):
     path = _settings_path(video_id)
     if path.exists():
         data = json.loads(path.read_text())
-        return AnalysisSettings(**data)
+        return migrate_settings(data)
     return AnalysisSettings()
 
 
 @router.put("/settings/{video_id}", response_model=AnalysisSettings)
-async def put_settings(video_id: str, body: AnalysisSettings):
+async def put_settings(video_id: str, body: dict = Body(...)):
     path = _settings_path(video_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, body.model_dump())
-    return body
+    migrated = migrate_settings(body)
+    atomic_write_json(path, migrated.model_dump())
+    return migrated
