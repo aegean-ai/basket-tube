@@ -20,22 +20,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```text
 basket-tube/
-├── notebooks/                   # Jupyter notebooks (run inside Docker with GPU)
-│   └── basketball_ai_how_to_detect_track_and_identify_basketball_players.ipynb
-├── api/src/                     # Layered FastAPI backend
+├── api/src/                     # CPU API (FastAPI, async)
 │   ├── main.py                  # App factory (create_app)
-│   ├── core/config.py           # Pydantic settings (env-driven)
-│   ├── core/dependencies.py     # FastAPI Depends providers
-│   ├── routers/                 # Route modules
+│   ├── config.py                # Pydantic settings (FW_ env prefix)
+│   ├── artifacts.py             # Config keys, paths, sidecars, deletion
+│   ├── routers/
+│   │   ├── pipeline.py          # Pipeline run/cancel/SSE/staleness
+│   │   ├── vision.py            # 6 vision stage endpoints + DELETE
+│   │   ├── download.py          # Video download (async via to_thread)
+│   │   ├── transcribe.py        # Whisper STT (async httpx)
+│   │   ├── captions.py          # Text timeline
+│   │   └── settings.py          # Per-video settings with migration
 │   ├── schemas/                 # Pydantic request/response models
-│   ├── services/                # Business logic
-│   └── inference/               # Model backend abstraction
-├── frontend/                    # Next.js + shadcn/ui frontend
+│   └── services/
+│       ├── pipeline_orchestrator.py  # Async DAG scheduler + SSE broadcast
+│       ├── event_bus.py              # Broadcast event bus
+│       ├── vision_service.py         # GPU service HTTP client
+│       └── whisper_service.py        # Async Whisper HTTP client
+├── basket_tube/inference/       # GPU inference service
+│   ├── main.py                  # FastAPI app (5 endpoints + progress)
+│   └── progress.py              # Atomic _progress.json writer
+├── frontend/                    # Next.js 16 + shadcn/ui
+├── notebooks/                   # Jupyter notebooks
 ├── pipeline_data/               # Runtime artifacts (videos, outputs)
-├── Dockerfile                   # GPU-enabled Jupyter environment (PyTorch + CUDA 12.8)
-├── docker-compose.yml           # Notebook service with nvidia profile
+├── Dockerfile.api               # CPU API image (non-root appuser)
+├── Dockerfile.gpu               # GPU inference image (non-root appuser)
+├── docker-compose.yml           # 4 services (api, inference, frontend, whisper)
 ├── pyproject.toml               # uv-managed dependencies
-└── uv.lock                     # Locked dependency versions
+└── uv.lock                      # Locked dependency versions
 ```
 
 ## Running the App
@@ -52,8 +64,9 @@ cp .env.example .env
 # Build and start
 docker compose --profile nvidia up -d
 
-# Open JupyterLab
-# http://localhost:8888
+# Open the app
+# Frontend: http://localhost:8501
+# API:      http://localhost:8080
 ```
 
 After changing `pyproject.toml` or the `Dockerfile`, rebuild:
@@ -71,20 +84,32 @@ docker compose --profile nvidia down
 
 ## Architecture
 
-### CV Pipeline (notebook)
+### Async Pipeline
+
+The CPU API runs a fully async pipeline orchestrator with dependency-aware parallelism:
 
 ```text
-Video frames → RF-DETR detection → SAM2 segmentation/tracking → Team classification → Jersey OCR → Court homography → Bird's-eye mapping
+detect ─┬→ track → ocr
+        ├→ classify-teams        (all 3 run concurrently after detect)
+        └→ court-map
 ```
+
+- Pipeline triggered via `POST /api/pipeline/run/{video_id}` (returns 202 immediately)
+- Real-time progress via SSE (`GET /api/pipeline/events/{video_id}`)
+- Broadcast EventBus supports multiple tabs + browser refresh reconnect
+- GPU service writes atomic `_progress.json` for frame-level progress
+- Per-stage settings with staleness detection (amber "Outdated" badge)
+- Per-stage Run/Re-run buttons (disabled while pipeline is active)
 
 ### Key dependencies
 
 - **PyTorch 2.7 + CUDA 12.8** — base Docker image provides GPU compute
-- **SAM2** (`segment-anything-2-real-time`) — pre-installed at `/opt/segment-anything-2-real-time` with checkpoints
-- **Roboflow `inference-gpu`** — player detection and keypoint models via Roboflow API
+- **Roboflow `inference-gpu`** — player detection, keypoint models, OCR via Roboflow
 - **`supervision`** — annotation, tracking, and video utilities
 - **`sports`** (roboflow, `feat/basketball` branch) — court configuration, team classification, view transforms
-- **`logfire`** — optional observability
+- **`logfire`** — observability (traces pipeline.run, gpu.{stage}, whisper.transcribe)
+- **`httpx`** — async HTTP for Whisper and GPU service calls
+- **Next.js 16 + shadcn/ui** — SSE-driven frontend with per-stage settings sidebar
 
 ### Logfire Observability
 
@@ -102,12 +127,17 @@ claude "$(uvx logfire@latest --region us prompt --project pantelis/basket-tube f
 |---|---|
 | `HF_TOKEN` | Hugging Face token (model downloads) |
 | `ROBOFLOW_API_KEY` | Roboflow API key (inference models) |
-| `SAM2_REPO` | Path to SAM2 install (default: `/opt/segment-anything-2-real-time`) |
+| `FW_INFERENCE_GPU_URL` | GPU service URL (default: `http://localhost:8090`) |
+| `FW_WHISPER_API_URL` | Whisper service URL (default: `http://localhost:8000`) |
+| `FW_LOGFIRE_WRITE_TOKEN` | Pydantic Logfire write token |
 | `ONNXRUNTIME_EXECUTION_PROVIDERS` | Set to `[CUDAExecutionProvider]` for GPU inference |
 
 ### Design decisions
 
-- All heavy dependencies (SAM2, checkpoints, Python packages) are pre-installed in the Docker image.
-- The detection notebook is adapted from a Google Colab original; Colab-specific code has been replaced with `os.environ`.
+- **Async everywhere** — `asyncio.to_thread()` for yt_dlp, `httpx.AsyncClient` for Whisper, async httpx for GPU calls. No blocking on the FastAPI event loop.
+- **SSE for progress** — Server-Sent Events with broadcast EventBus (append-only log + per-subscriber cursors). No WebSocket needed for one-directional server→client flow.
+- **Config-key caching** — each parameter combination produces a unique `c-{hash}` directory. Changing confidence or swapping models never returns stale results.
+- **Staleness detection** — backend computes expected config keys from current settings and compares against cached artifacts. Frontend shows "Outdated" badge.
+- **Non-root containers** — Both API and GPU containers run as `appuser` (UID/GID from host) to avoid permission issues with mounted volumes.
+- **Per-stage settings** — each pipeline stage has its own settings panel with model configuration, following the Foreign Whispers sidebar pattern.
 - `pyproject.toml` manages all Python deps via `uv`; the `sports` package is sourced from a git branch.
-- FastAPI backend and Next.js frontend are retained for the full application (commentary analysis, video player, chat interface).
