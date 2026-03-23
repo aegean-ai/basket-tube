@@ -1,5 +1,6 @@
 """POST /api/download — download YouTube video + captions (issue by5)."""
 
+import asyncio
 import json
 import pathlib
 
@@ -9,6 +10,11 @@ from api.src.config import settings
 from api.src.video_registry import get_video
 from api.src.schemas.download import CaptionSegment, DownloadRequest, DownloadResponse
 from api.src.services.download_service import DownloadService
+
+try:
+    import logfire
+except ImportError:
+    logfire = None  # type: ignore
 
 router = APIRouter(prefix="/api")
 
@@ -32,29 +38,48 @@ async def download_endpoint(body: DownloadRequest):
             raise HTTPException(404, f"Local video file not found: {stem}.mp4")
         caption_path = captions_dir / f"{stem}.txt"
         segments = _download_service.read_caption_segments(caption_path) if caption_path.exists() else []
-        return DownloadResponse(video_id=entry.id, title=stem, caption_segments=segments)
+        with (logfire.span("pipeline.download", video_id=entry.id, source="local") if logfire else _null_ctx()):
+            return DownloadResponse(video_id=entry.id, title=stem, caption_segments=segments)
 
     # YouTube download
-    video_id, title = _download_service.get_video_info(body.url)
+    video_id, title = await asyncio.to_thread(_download_service.get_video_info, body.url)
     entry = get_video(video_id)
     stem = entry.title if entry else title.replace(":", "")
 
     video_path = videos_dir / f"{stem}.mp4"
     caption_path = captions_dir / f"{stem}.txt"
 
-    if not video_path.exists():
-        _download_service.download_video(body.url, str(videos_dir), stem)
+    async def _do_youtube_download():
+        if not video_path.exists():
+            await asyncio.to_thread(_download_service.download_video, body.url, str(videos_dir), stem)
 
-    if not caption_path.exists():
-        try:
-            _download_service.download_caption(body.url, str(captions_dir), stem)
-        except Exception:
-            pass  # Captions may be disabled for this video — not a fatal error
+        if not caption_path.exists():
+            try:
+                await asyncio.to_thread(_download_service.download_caption, body.url, str(captions_dir), stem)
+            except Exception:
+                pass  # Captions may be disabled for this video — not a fatal error
 
-    segments = _download_service.read_caption_segments(caption_path) if caption_path.exists() else []
+        segments = _download_service.read_caption_segments(caption_path) if caption_path.exists() else []
+        return segments
+
+    if logfire:
+        with logfire.span("pipeline.download", video_id=video_id, source="youtube"):
+            segments = await _do_youtube_download()
+    else:
+        segments = await _do_youtube_download()
 
     return DownloadResponse(
         video_id=video_id,
         title=title,
         caption_segments=segments,
     )
+
+
+class _null_ctx:
+    """No-op context manager used when logfire is not available."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        pass
