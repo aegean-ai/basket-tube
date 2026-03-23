@@ -1,8 +1,9 @@
-// src/hooks/use-pipeline.ts
 "use client";
 
 import { useCallback, useReducer } from "react";
 import type { PipelineState, VisionStage, StageState, AnalysisSettings } from "@/lib/types";
+import type { SSEEvent } from "@/hooks/use-sse";
+import { useSSE } from "@/hooks/use-sse";
 import * as api from "@/lib/api";
 
 const STAGES: VisionStage[] = [
@@ -19,10 +20,12 @@ const INITIAL_STATE: PipelineState = {
 
 type Action =
   | { type: "START"; videoId: string }
-  | { type: "STAGE_ACTIVE"; stage: VisionStage }
-  | { type: "STAGE_COMPLETE"; stage: VisionStage; result: unknown; config_key?: string; duration_ms: number }
-  | { type: "STAGE_ERROR"; stage: VisionStage; error: string }
+  | { type: "STAGE_STARTED"; stage: VisionStage; timestamp: number }
+  | { type: "STAGE_PROGRESS"; stage: VisionStage; progress: number; frame: number; total_frames: number }
+  | { type: "STAGE_COMPLETE"; stage: VisionStage; config_key?: string; duration_s: number }
   | { type: "STAGE_SKIPPED"; stage: VisionStage; config_key?: string }
+  | { type: "STAGE_ERROR"; stage: VisionStage; error: string }
+  | { type: "PIPELINE_STATE"; stages: Record<string, unknown> }
   | { type: "COMPLETE" }
   | { type: "RESET" };
 
@@ -30,10 +33,27 @@ function reducer(state: PipelineState, action: Action): PipelineState {
   switch (action.type) {
     case "START":
       return { ...INITIAL_STATE, status: "running", videoId: action.videoId };
-    case "STAGE_ACTIVE":
+    case "STAGE_STARTED":
       return {
         ...state,
-        stages: { ...state.stages, [action.stage]: { status: "active", started_at: Date.now() } },
+        status: "running",
+        stages: {
+          ...state.stages,
+          [action.stage]: { status: "active", started_at: action.timestamp * 1000 },
+        },
+      };
+    case "STAGE_PROGRESS":
+      return {
+        ...state,
+        stages: {
+          ...state.stages,
+          [action.stage]: {
+            ...state.stages[action.stage as VisionStage],
+            progress: action.progress,
+            frame: action.frame,
+            total_frames: action.total_frames,
+          },
+        },
       };
     case "STAGE_COMPLETE":
       return {
@@ -42,9 +62,8 @@ function reducer(state: PipelineState, action: Action): PipelineState {
           ...state.stages,
           [action.stage]: {
             status: "complete",
-            result: action.result,
             config_key: action.config_key,
-            duration_ms: action.duration_ms,
+            duration_ms: action.duration_s * 1000,
           },
         },
       };
@@ -60,8 +79,22 @@ function reducer(state: PipelineState, action: Action): PipelineState {
       return {
         ...state,
         status: "error",
-        stages: { ...state.stages, [action.stage]: { status: "error", error: action.error } },
+        stages: {
+          ...state.stages,
+          [action.stage]: { status: "error", error: action.error },
+        },
       };
+    case "PIPELINE_STATE": {
+      const hydrated = { ...state, status: "running" as const };
+      if (action.stages) {
+        for (const [key, val] of Object.entries(action.stages)) {
+          if (key in hydrated.stages) {
+            hydrated.stages = { ...hydrated.stages, [key]: { ...hydrated.stages[key as VisionStage], ...(val as object) } };
+          }
+        }
+      }
+      return hydrated;
+    }
     case "COMPLETE":
       return { ...state, status: "complete" };
     case "RESET":
@@ -71,105 +104,83 @@ function reducer(state: PipelineState, action: Action): PipelineState {
   }
 }
 
-async function runStage<T>(
-  dispatch: React.Dispatch<Action>,
-  stage: VisionStage,
-  fn: () => Promise<T & { config_key?: string; skipped?: boolean }>,
-): Promise<T & { config_key?: string; skipped?: boolean }> {
-  dispatch({ type: "STAGE_ACTIVE", stage });
-  const start = Date.now();
-  try {
-    const result = await fn();
-    const duration_ms = Date.now() - start;
-    if (result.skipped) {
-      dispatch({ type: "STAGE_SKIPPED", stage, config_key: result.config_key });
-    } else {
-      dispatch({ type: "STAGE_COMPLETE", stage, result, config_key: result.config_key, duration_ms });
-    }
-    return result;
-  } catch (err) {
-    dispatch({ type: "STAGE_ERROR", stage, error: err instanceof Error ? err.message : String(err) });
-    throw err;
-  }
-}
-
 export function usePipeline() {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
 
-  const runPipeline = useCallback(
-    async (videoId: string, videoUrl: string, settings: AnalysisSettings) => {
-      dispatch({ type: "START", videoId });
-
-      try {
-        // 1. Download (send video ID for local files, URL for YouTube)
-        const downloadUrl = videoUrl === "local" ? videoId : videoUrl;
-        await runStage(dispatch, "download", () => api.downloadVideo(downloadUrl));
-
-        // 2. Transcribe
-        await runStage(dispatch, "transcribe", () => api.transcribeVideo(videoId));
-
-        // 3. Detect
-        const detectResult = await runStage(dispatch, "detect", () =>
-          api.detectPlayers(videoId, {
-            confidence: settings.advanced.confidence,
-            iou_threshold: settings.advanced.iou_threshold,
-          })
-        );
-        const detKey = detectResult.config_key!;
-
-        // 4. Track
-        const trackResult = await runStage(dispatch, "track", () =>
-          api.trackPlayers(videoId, { det_config_key: detKey })
-        );
-        const trackKey = trackResult.config_key!;
-
-        // 5. OCR — capture return value for render
-        const ocrResult = await runStage(dispatch, "ocr", () =>
-          api.ocrJerseys(videoId, {
-            track_config_key: trackKey,
-            ocr_interval: settings.advanced.ocr_interval,
-          })
-        );
-
-        // 6. Classify teams
-        const teamsResult = await runStage(dispatch, "classify-teams", () =>
-          api.classifyTeams(videoId, {
-            det_config_key: detKey,
-            stride: settings.advanced.stride,
-            crop_scale: settings.advanced.crop_scale,
-          })
-        );
-
-        // 7. Court map — capture return value for render
-        const courtResult = await runStage(dispatch, "court-map", () =>
-          api.mapCourt(videoId, { det_config_key: detKey })
-        );
-
-        // 8. Render (stub — will get 501, catch and mark skipped)
-        try {
-          await runStage(dispatch, "render", () =>
-            api.renderVideo(videoId, {
-              det_config_key: detKey,
-              track_config_key: trackKey,
-              teams_config_key: teamsResult.config_key!,
-              jerseys_config_key: ocrResult.config_key!,
-              court_config_key: courtResult.config_key!,
-            })
-          );
-        } catch {
-          // Render is a 501 stub — mark as skipped, don't fail pipeline
-          dispatch({ type: "STAGE_SKIPPED", stage: "render" });
-        }
-
+  const handleSSE = useCallback((event: SSEEvent) => {
+    switch (event.event) {
+      case "stage_started":
+        dispatch({ type: "STAGE_STARTED", stage: event.stage as VisionStage, timestamp: event.timestamp ?? Date.now() / 1000 });
+        break;
+      case "stage_progress":
+        dispatch({
+          type: "STAGE_PROGRESS",
+          stage: event.stage as VisionStage,
+          progress: event.progress ?? 0,
+          frame: event.frame ?? 0,
+          total_frames: event.total_frames ?? 0,
+        });
+        break;
+      case "stage_completed":
+        dispatch({ type: "STAGE_COMPLETE", stage: event.stage as VisionStage, config_key: event.config_key, duration_s: event.duration_s ?? 0 });
+        break;
+      case "stage_skipped":
+        dispatch({ type: "STAGE_SKIPPED", stage: event.stage as VisionStage, config_key: event.config_key });
+        break;
+      case "stage_error":
+        dispatch({ type: "STAGE_ERROR", stage: event.stage as VisionStage, error: event.error ?? "Unknown error" });
+        break;
+      case "pipeline_state":
+        dispatch({ type: "PIPELINE_STATE", stages: event.stages ?? {} });
+        break;
+      case "pipeline_completed":
         dispatch({ type: "COMPLETE" });
-      } catch {
-        // Error already dispatched by runStage
+        break;
+    }
+  }, []);
+
+  const { connected } = useSSE(state.videoId, { onEvent: handleSSE });
+
+  const runPipeline = useCallback(
+    async (videoId: string, _videoUrl: string, settings: AnalysisSettings) => {
+      dispatch({ type: "START", videoId });
+      try {
+        await api.runFullPipeline(videoId, settings);
+      } catch (err) {
+        dispatch({ type: "STAGE_ERROR", stage: "download", error: err instanceof Error ? err.message : String(err) });
       }
     },
-    [] // no state dependencies — all config keys captured from return values
+    [],
   );
+
+  const runStage = useCallback(
+    async (stage: VisionStage, videoId: string, params: object) => {
+      const stageEndpoints: Record<string, (id: string, p: object) => Promise<unknown>> = {
+        detect: api.detectPlayers,
+        track: api.trackPlayers,
+        ocr: api.ocrJerseys,
+        "classify-teams": api.classifyTeams,
+        "court-map": api.mapCourt,
+      };
+      const fn = stageEndpoints[stage];
+      if (fn) await fn(videoId, params);
+    },
+    [],
+  );
+
+  const rerunStage = useCallback(
+    async (stage: VisionStage, videoId: string, configKey: string, params: object) => {
+      await api.deleteArtifact(stage, videoId, configKey);
+      await runStage(stage, videoId, params);
+    },
+    [runStage],
+  );
+
+  const cancelPipeline = useCallback(async () => {
+    if (state.videoId) await api.cancelPipeline(state.videoId);
+  }, [state.videoId]);
 
   const reset = useCallback(() => dispatch({ type: "RESET" }), []);
 
-  return { state, runPipeline, reset };
+  return { state, runPipeline, runStage, rerunStage, cancelPipeline, reset, connected };
 }
