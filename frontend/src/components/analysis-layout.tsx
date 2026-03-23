@@ -15,7 +15,7 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { usePipeline } from "@/hooks/use-pipeline";
 import { useAnalysisSettings } from "@/contexts/analysis-settings-context";
 import { useStaleness } from "@/hooks/use-staleness";
-import { downloadVideo, transcribeVideo } from "@/lib/api";
+import * as api from "@/lib/api";
 import type { Video, TabId, VisionStage } from "@/lib/types";
 
 interface AnalysisLayoutProps {
@@ -28,7 +28,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
   );
   const [selectedTab, setSelectedTab] = useState<TabId>("pipeline");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { state, runPipeline, rerunStage, cancelPipeline, markStageComplete, reset, connected } = usePipeline();
+  const { state, runPipeline, cancelPipeline, markStageActive, markStageComplete, markStageError, reset, connected } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
   const staleness = useStaleness(selectedVideoId, settings);
 
@@ -51,39 +51,78 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     reset();
   };
 
-  const [directRunning, setDirectRunning] = useState<string | null>(null);
-
+  /**
+   * Run a single stage directly via its API endpoint.
+   * Does NOT reset other stages. Only updates this stage's status.
+   */
   const handleRunStage = async (stage: VisionStage) => {
     if (!selectedVideo) return;
-    // Download and transcribe are independent of the vision DAG — call directly
-    if (stage === "download") {
-      setDirectRunning("download");
-      try {
-        const res = await downloadVideo(selectedVideo.url === "local" ? selectedVideo.id : selectedVideo.url);
-        markStageComplete("download");
-      } finally {
-        setDirectRunning(null);
+    const vid = selectedVideo.id;
+    const s = settings.stages;
+    const detKey = state.stages.detect.config_key ?? "";
+    const trackKey = state.stages.track.config_key ?? "";
+
+    markStageActive(stage);
+    try {
+      switch (stage) {
+        case "download": {
+          await api.downloadVideo(selectedVideo.url === "local" ? vid : selectedVideo.url);
+          markStageComplete("download");
+          break;
+        }
+        case "transcribe": {
+          const res = await api.transcribeVideo(vid, s.transcribe.use_youtube_captions);
+          markStageComplete("transcribe", { skipped: res.skipped });
+          break;
+        }
+        case "detect": {
+          const res = await api.detectPlayers(vid, { model_id: s.detect.model_id, confidence: s.detect.confidence, iou_threshold: s.detect.iou_threshold });
+          markStageComplete("detect", { skipped: res.skipped, config_key: res.config_key });
+          break;
+        }
+        case "track": {
+          const res = await api.trackPlayers(vid, { det_config_key: detKey });
+          markStageComplete("track", { skipped: res.skipped, config_key: res.config_key });
+          break;
+        }
+        case "ocr": {
+          const res = await api.ocrJerseys(vid, { track_config_key: trackKey, ocr_interval: s.ocr.ocr_interval });
+          markStageComplete("ocr", { skipped: res.skipped, config_key: res.config_key });
+          break;
+        }
+        case "classify-teams": {
+          const res = await api.classifyTeams(vid, { det_config_key: detKey, stride: s.teams.stride, crop_scale: s.teams.crop_scale });
+          markStageComplete("classify-teams", { skipped: res.skipped, config_key: res.config_key });
+          break;
+        }
+        case "court-map": {
+          const res = await api.mapCourt(vid, { det_config_key: detKey });
+          markStageComplete("court-map", { skipped: res.skipped, config_key: res.config_key });
+          break;
+        }
       }
-      return;
+    } catch (err) {
+      markStageError(stage, err instanceof Error ? err.message : String(err));
     }
-    if (stage === "transcribe") {
-      setDirectRunning("transcribe");
-      try {
-        const res = await transcribeVideo(selectedVideo.id, settings.stages.transcribe.use_youtube_captions);
-        markStageComplete("transcribe", res.skipped);
-      } finally {
-        setDirectRunning(null);
-      }
-      return;
-    }
-    // Vision stages go through the pipeline orchestrator
-    runPipeline(selectedVideo.id, selectedVideo.url, settings, stage);
   };
 
-  const handleRerunStage = (stage: VisionStage) => {
+  /**
+   * Re-run = delete artifact + run stage.
+   * The API endpoint clears cache automatically when artifact is missing.
+   */
+  const handleRerunStage = async (stage: VisionStage) => {
     if (!selectedVideo) return;
     const configKey = state.stages[stage].config_key ?? "";
-    rerunStage(stage, selectedVideo.id, configKey, settings);
+    // Map stage name to artifact directory name
+    const artifactDir: Record<string, string> = {
+      detect: "detections", track: "tracks", ocr: "jerseys",
+      "classify-teams": "teams", "court-map": "court",
+    };
+    const dir = artifactDir[stage];
+    if (dir && configKey) {
+      await api.deleteArtifact(dir, selectedVideo.id, configKey);
+    }
+    await handleRunStage(stage);
   };
 
   return (
