@@ -183,15 +183,23 @@ export function usePipeline() {
     if (state.videoId) await api.cancelPipeline(state.videoId);
   }, [state.videoId]);
 
-  const markStageComplete = useCallback((stage: VisionStage, skipped?: boolean) => {
-    if (skipped) {
-      dispatch({ type: "STAGE_SKIPPED", stage });
+  const markStageActive = useCallback((stage: VisionStage) => {
+    dispatch({ type: "STAGE_STARTED", stage, timestamp: Date.now() / 1000 });
+  }, []);
+
+  const markStageComplete = useCallback((stage: VisionStage, opts?: { skipped?: boolean; config_key?: string }) => {
+    if (opts?.skipped) {
+      dispatch({ type: "STAGE_SKIPPED", stage, config_key: opts.config_key });
     } else {
-      dispatch({ type: "STAGE_COMPLETE", stage, duration_s: 0 });
+      dispatch({ type: "STAGE_COMPLETE", stage, duration_s: 0, config_key: opts?.config_key });
     }
+  }, []);
+
+  const markStageError = useCallback((stage: VisionStage, error: string) => {
+    dispatch({ type: "STAGE_ERROR", stage, error });
   }, []);
 
   const reset = useCallback(() => dispatch({ type: "RESET" }), []);
 
-  return { state, runPipeline, rerunStage, cancelPipeline, markStageComplete, reset, connected };
+  return { state, runPipeline, rerunStage, cancelPipeline, markStageActive, markStageComplete, markStageError, reset, connected };
 }
