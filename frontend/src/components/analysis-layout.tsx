@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
-import { AppSidebar, type AnalyticsView } from "@/components/app-sidebar";
+import { AppSidebar, type SidebarView } from "@/components/app-sidebar";
 import { PipelineStatusBar } from "@/components/pipeline-status-bar";
 import { PipelineTable } from "@/components/pipeline-table";
 import { PipelineCards } from "@/components/pipeline-cards";
@@ -25,7 +25,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
   const [selectedVideoId, setSelectedVideoId] = useState<string | undefined>(
     videos[0]?.id
   );
-  const [analyticsView, setAnalyticsView] = useState<AnalyticsView>("pipeline");
+  const [activeView, setActiveView] = useState<SidebarView>("pipeline");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { state, runPipeline, cancelPipeline, markStageActive, markStageComplete, markStageError, reset, connected } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
@@ -143,42 +143,51 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
         onAnalyze={handleAnalyze}
         isRunning={state.status === "running"}
         onOpenSettings={() => setSettingsOpen(true)}
-        analyticsView={analyticsView}
-        onAnalyticsViewChange={setAnalyticsView}
+        activeView={activeView}
+        onViewChange={setActiveView}
       />
       <SidebarInset>
         <div className="flex flex-1 flex-col gap-4 p-4">
           <PipelineStatusBar state={state} />
 
-          {/* Summary cards — always visible */}
-          <PipelineCards state={state} />
-
-          {/* Video player area */}
-          <div className="aspect-video w-full rounded-lg border bg-card overflow-hidden">
-            <VideoCanvas videoId={selectedVideoId} />
-          </div>
-
-          {/* Chat — always visible below video */}
-          <ChatPanel />
-
-          {/* Analytics panel — selected from sidebar */}
-          {analyticsView === "pipeline" && (
-            <PipelineTable
-              state={state}
-              staleness={staleness}
-              onRunStage={handleRunStage}
-              onRerunStage={handleRerunStage}
-            />
+          {/* Chat view: video + chat interface */}
+          {activeView === "chat" && (
+            <>
+              <div className="aspect-video w-full rounded-lg border bg-card overflow-hidden">
+                <VideoCanvas videoId={selectedVideoId} />
+              </div>
+              <ChatPanel />
+            </>
           )}
-          {analyticsView === "players" && (
-            <PlayersTable
-              videoId={selectedVideoId}
-              pipelineState={state}
-              roster={settings.game_context.roster}
-            />
-          )}
-          {analyticsView === "court" && (
-            <CourtView videoId={selectedVideoId} />
+
+          {/* Analytics views: cards + video + selected panel */}
+          {activeView !== "chat" && (
+            <>
+              <PipelineCards state={state} />
+
+              <div className="aspect-video w-full rounded-lg border bg-card overflow-hidden">
+                <VideoCanvas videoId={selectedVideoId} />
+              </div>
+
+              {activeView === "pipeline" && (
+                <PipelineTable
+                  state={state}
+                  staleness={staleness}
+                  onRunStage={handleRunStage}
+                  onRerunStage={handleRerunStage}
+                />
+              )}
+              {activeView === "players" && (
+                <PlayersTable
+                  videoId={selectedVideoId}
+                  pipelineState={state}
+                  roster={settings.game_context.roster}
+                />
+              )}
+              {activeView === "court" && (
+                <CourtView videoId={selectedVideoId} />
+              )}
+            </>
           )}
         </div>
       </SidebarInset>

@@ -1,9 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { CircleDot, VideoIcon, PlayIcon, SettingsIcon, WorkflowIcon, UsersIcon, MapIcon } from "lucide-react";
+import { CircleDot, VideoIcon, PlayIcon, SettingsIcon, WorkflowIcon, UsersIcon, MapIcon, MessageSquareIcon, BotIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
   SidebarContent,
@@ -19,12 +18,16 @@ import {
 } from "@/components/ui/sidebar";
 import type { Video } from "@/lib/types";
 
-export type AnalyticsView = "pipeline" | "players" | "court";
+export type SidebarView = "pipeline" | "players" | "court" | "chat";
 
-const ANALYTICS_VIEWS: { key: AnalyticsView; label: string; icon: React.ElementType }[] = [
+const ANALYTICS_VIEWS: { key: SidebarView; label: string; icon: React.ElementType }[] = [
   { key: "pipeline", label: "Pipeline", icon: WorkflowIcon },
   { key: "players", label: "Players", icon: UsersIcon },
   { key: "court", label: "Court", icon: MapIcon },
+];
+
+const AGENT_VIEWS: { key: SidebarView; label: string; icon: React.ElementType }[] = [
+  { key: "chat", label: "Chat", icon: MessageSquareIcon },
 ];
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
@@ -34,8 +37,8 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   onAnalyze: () => void;
   isRunning: boolean;
   onOpenSettings?: () => void;
-  analyticsView: AnalyticsView;
-  onAnalyticsViewChange: (view: AnalyticsView) => void;
+  activeView: SidebarView;
+  onViewChange: (view: SidebarView) => void;
 }
 
 export function AppSidebar({
@@ -45,8 +48,8 @@ export function AppSidebar({
   onAnalyze,
   isRunning,
   onOpenSettings,
-  analyticsView,
-  onAnalyticsViewChange,
+  activeView,
+  onViewChange,
   ...props
 }: AppSidebarProps) {
   return (
@@ -96,14 +99,34 @@ export function AppSidebar({
         </SidebarGroup>
 
         <SidebarGroup>
+          <SidebarGroupLabel>Agents</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {AGENT_VIEWS.map(({ key, label, icon: Icon }) => (
+                <SidebarMenuItem key={key}>
+                  <SidebarMenuButton
+                    isActive={activeView === key}
+                    onClick={() => onViewChange(key)}
+                    tooltip={label}
+                  >
+                    <Icon className="shrink-0" />
+                    <span>{label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
           <SidebarGroupLabel>Analytics</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {ANALYTICS_VIEWS.map(({ key, label, icon: Icon }) => (
                 <SidebarMenuItem key={key}>
                   <SidebarMenuButton
-                    isActive={analyticsView === key}
-                    onClick={() => onAnalyticsViewChange(key)}
+                    isActive={activeView === key}
+                    onClick={() => onViewChange(key)}
                     tooltip={label}
                   >
                     <Icon className="shrink-0" />
