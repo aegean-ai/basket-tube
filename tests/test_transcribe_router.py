@@ -1,7 +1,7 @@
 """Tests for POST /api/transcribe/{video_id} endpoint."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,7 +46,7 @@ def test_transcribe_returns_segments(client, monkeypatch, ui_dir):
     """POST /api/transcribe/{video_id} returns structured segments."""
     (ui_dir / "videos" / "Test Title.mp4").write_bytes(b"fake-video")
 
-    with patch("api.src.services.whisper_service.transcribe", return_value=_make_whisper_result()):
+    with patch("api.src.services.whisper_service.transcribe", new=AsyncMock(return_value=_make_whisper_result())):
         resp = client.post("/api/transcribe/G3Eup4mfJdA?use_youtube_captions=false")
 
     assert resp.status_code == 200
@@ -61,7 +61,7 @@ def test_transcribe_saves_json(client, monkeypatch, ui_dir):
     """Transcription result is persisted to transcriptions/whisper/{title}.json."""
     (ui_dir / "videos" / "Test Title.mp4").write_bytes(b"fake-video")
 
-    with patch("api.src.services.whisper_service.transcribe", return_value=_make_whisper_result()):
+    with patch("api.src.services.whisper_service.transcribe", new=AsyncMock(return_value=_make_whisper_result())):
         client.post("/api/transcribe/G3Eup4mfJdA?use_youtube_captions=false")
 
     saved = ui_dir / "transcriptions" / "whisper" / "Test Title.json"
