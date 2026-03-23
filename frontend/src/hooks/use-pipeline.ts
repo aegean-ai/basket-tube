@@ -146,8 +146,11 @@ export function usePipeline() {
       dispatch({ type: "START", videoId });
       try {
         await api.runFullPipeline(videoId, settings, fromStage);
-      } catch (err) {
-        dispatch({ type: "STAGE_ERROR", stage: "download", error: err instanceof Error ? err.message : String(err) });
+      } catch (err: unknown) {
+        // 409 = pipeline already running — SSE will connect and replay state
+        const status = (err as { status?: number }).status;
+        if (status === 409) return;
+        dispatch({ type: "STAGE_ERROR", stage: fromStage ?? "download", error: err instanceof Error ? err.message : String(err) });
       }
     },
     [],

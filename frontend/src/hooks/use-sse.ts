@@ -21,6 +21,12 @@ interface UseSSEOptions {
   onEvent: (event: SSEEvent) => void;
 }
 
+// SSE must bypass the Next.js rewrite proxy — it buffers streaming responses.
+// Connect directly to the FastAPI backend.
+const SSE_BASE = typeof window !== "undefined"
+  ? `http://${window.location.hostname}:8080`
+  : "";
+
 export function useSSE(videoId: string | undefined, { onEvent }: UseSSEOptions) {
   const [connected, setConnected] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -30,7 +36,7 @@ export function useSSE(videoId: string | undefined, { onEvent }: UseSSEOptions) 
   const connect = useCallback(() => {
     if (!videoId) return;
 
-    const es = new EventSource(`/api/pipeline/events/${videoId}`);
+    const es = new EventSource(`${SSE_BASE}/api/pipeline/events/${videoId}`);
     eventSourceRef.current = es;
 
     es.onopen = () => setConnected(true);
