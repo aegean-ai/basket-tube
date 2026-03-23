@@ -50,9 +50,21 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     reset();
   };
 
-  const handleRunStage = (stage: VisionStage) => {
+  const handleRunStage = async (stage: VisionStage) => {
     if (!selectedVideo) return;
-    // Run the full pipeline starting from this stage
+    // Download and transcribe are independent of the vision DAG — call directly
+    if (stage === "download") {
+      runPipeline(selectedVideo.id, selectedVideo.url, settings);
+      return;
+    }
+    if (stage === "transcribe") {
+      const { transcribeVideo } = await import("@/lib/api");
+      try {
+        await transcribeVideo(selectedVideo.id, settings.stages.transcribe.use_youtube_captions);
+      } catch { /* ignore — user can retry */ }
+      return;
+    }
+    // Vision stages go through the pipeline orchestrator
     runPipeline(selectedVideo.id, selectedVideo.url, settings, stage);
   };
 
