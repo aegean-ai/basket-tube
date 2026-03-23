@@ -26,7 +26,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
   );
   const [selectedTab, setSelectedTab] = useState<TabId>("pipeline");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { state, runPipeline, reset } = usePipeline();
+  const { state, runPipeline, runStage, rerunStage, cancelPipeline, reset, connected } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
 
   const selectedVideo = videos.find((v) => v.id === selectedVideoId);
