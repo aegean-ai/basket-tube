@@ -57,8 +57,10 @@ export function PipelineStatusBar({ state }: PipelineStatusBarProps) {
     const errorMsg = errorStage ? state.stages[errorStage].error : "Unknown error";
     message = `Error in ${errorStage ?? "pipeline"}: ${errorMsg}`;
   } else if (activeStage) {
+    const activeProgress = state.stages[activeStage].progress;
+    const pct = activeProgress != null ? ` ${Math.round(activeProgress * 100)}%` : "";
     const elapsedStr = formatElapsed(elapsed);
-    message = `${STAGE_DISPLAY_NAMES[activeStage]}${elapsedStr ? ` (${elapsedStr})` : ""}`;
+    message = `${STAGE_DISPLAY_NAMES[activeStage]}${pct}${elapsedStr ? ` (${elapsedStr})` : ""}`;
   } else {
     message = "Starting analysis...";
   }
