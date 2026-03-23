@@ -53,6 +53,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from api.src.video_registry import resolve_title as resolve_stem
 from api.src.artifacts import config_key, artifact_path, atomic_write_json
 
+from basket_tube.inference.progress import write_progress
+
 from basket_tube.inference.roboflow.models import (
     get_model, run_detection, run_keypoints, run_ocr,
     PLAYER_DETECTION_MODEL_ID, COURT_KEYPOINT_MODEL_ID,
@@ -168,6 +170,9 @@ async def detect(req: InferenceRequest):
                 })
                 total_detections += n_det
 
+                if idx % 10 == 0:
+                    write_progress(out.parent, frame=idx, total_frames=total_frames)
+
                 if idx > 0 and idx % LOG_INTERVAL == 0:
                     fps = idx / (time.monotonic() - t_start)
                     pct = (idx / total_frames * 100) if total_frames else 0
@@ -189,6 +194,7 @@ async def detect(req: InferenceRequest):
             }
 
             atomic_write_json(out, output)
+            (out.parent / "_progress.json").unlink(missing_ok=True)
             return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
         finally:
             if span:
@@ -231,6 +237,8 @@ async def keypoints(req: InferenceRequest):
         try:
             model = get_model(model_id)
             frame_generator = sv.get_video_frames_generator(str(video_path))
+            kp_video_info = sv.VideoInfo.from_video_path(str(video_path))
+            kp_total_frames = kp_video_info.total_frames or 0
 
             frames_data = []
             n_mapped = 0
@@ -251,6 +259,9 @@ async def keypoints(req: InferenceRequest):
 
                 frames_data.append({"frame_index": idx, "keypoints_xy": xy, "keypoints_confidence": conf})
 
+                if idx % 10 == 0:
+                    write_progress(out.parent, frame=idx, total_frames=kp_total_frames)
+
                 if idx > 0 and idx % LOG_INTERVAL == 0:
                     _log_info("keypoints.progress frame={frame} mapped={mapped} keypoints_this_frame={n_kp}",
                               frame=idx, mapped=n_mapped, n_kp=len(xy))
@@ -266,6 +277,7 @@ async def keypoints(req: InferenceRequest):
             }
 
             atomic_write_json(out, output)
+            (out.parent / "_progress.json").unlink(missing_ok=True)
             return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
         finally:
             if span:
@@ -322,15 +334,19 @@ async def ocr(req: InferenceRequest):
             NUMBER_CLASS_ID = 2  # "number" class from RF-DETR
 
             frame_generator = sv.get_video_frames_generator(str(video_path))
+            ocr_total_frames = len(tracks_data.get("frames", []))
             n_ocr_frames = 0
             n_ocr_reads = 0
             t_start = time.monotonic()
 
             for idx, frame in enumerate(frame_generator):
-                if idx >= len(tracks_data.get("frames", [])):
+                if idx >= ocr_total_frames:
                     break
                 if idx % ocr_interval != 0:
                     continue
+
+                if idx % 10 == 0:
+                    write_progress(out.parent, frame=idx, total_frames=ocr_total_frames)
 
                 frame_track = tracks_data["frames"][idx]
                 tracker_ids = frame_track.get("tracker_ids", [])
@@ -406,6 +422,7 @@ async def ocr(req: InferenceRequest):
             }
 
             atomic_write_json(out, output)
+            (out.parent / "_progress.json").unlink(missing_ok=True)
             return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
         finally:
             if span:
@@ -454,6 +471,7 @@ async def track(req: InferenceRequest):
 
             frames_data = []
             all_tracker_ids = set()
+            track_total_frames = len(det_data["frames"])
             t_start = time.monotonic()
 
             for frame_det in det_data["frames"]:
@@ -488,6 +506,9 @@ async def track(req: InferenceRequest):
                     "mask_rle": [],
                 })
 
+                if idx % 10 == 0:
+                    write_progress(out.parent, frame=idx, total_frames=track_total_frames)
+
                 if idx > 0 and idx % LOG_INTERVAL == 0:
                     _log_info("track.progress frame={frame} active_tracks={n_active} total_ids={n_total}",
                               frame=idx, n_active=len(tids), n_total=len(all_tracker_ids))
@@ -506,6 +527,7 @@ async def track(req: InferenceRequest):
             }
 
             atomic_write_json(out, output)
+            (out.parent / "_progress.json").unlink(missing_ok=True)
             return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
         finally:
             if span:
@@ -556,12 +578,16 @@ async def classify_teams(req: InferenceRequest):
             crops = []
             crop_metadata = []
             frame_generator = sv.get_video_frames_generator(str(video_path), stride=stride)
+            teams_total_frames = len(det_data["frames"])
             t_start = time.monotonic()
 
             for frame_idx_sampled, frame in enumerate(frame_generator):
                 actual_idx = frame_idx_sampled * stride
-                if actual_idx >= len(det_data["frames"]):
+                if actual_idx >= teams_total_frames:
                     break
+
+                if frame_idx_sampled % 10 == 0:
+                    write_progress(out.parent, frame=actual_idx, total_frames=teams_total_frames)
 
                 frame_det = det_data["frames"][actual_idx]
                 xyxy = np.array(frame_det["xyxy"])
@@ -592,6 +618,7 @@ async def classify_teams(req: InferenceRequest):
                     "assignments": [],
                 }
                 atomic_write_json(out, output)
+                (out.parent / "_progress.json").unlink(missing_ok=True)
                 return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
 
             _log_info("classify_teams.fitting n_crops={n}", n=len(crops))
@@ -619,6 +646,7 @@ async def classify_teams(req: InferenceRequest):
             }
 
             atomic_write_json(out, output)
+            (out.parent / "_progress.json").unlink(missing_ok=True)
             return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
         finally:
             if span:
