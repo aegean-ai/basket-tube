@@ -80,6 +80,8 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
       - BT_DATA_DIR=/app/pipeline_data/api
       - MODEL_CACHE_DIR=/cache/roboflow
+      - HF_HOME=/cache/huggingface
+      - TORCH_HOME=/cache/torch
       - LOGFIRE_TOKEN=${LOGFIRE_WRITE_TOKEN:-}
     volumes:
       - ./pipeline_data:/app/pipeline_data
