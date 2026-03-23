@@ -21,6 +21,7 @@ const INITIAL_STATE: PipelineState = {
 type Action =
   | { type: "START"; videoId: string }
   | { type: "STAGE_STARTED"; stage: VisionStage; timestamp: number }
+  | { type: "STAGE_ACTIVE_ONLY"; stage: VisionStage; timestamp: number }
   | { type: "STAGE_PROGRESS"; stage: VisionStage; progress: number; frame: number; total_frames: number }
   | { type: "STAGE_COMPLETE"; stage: VisionStage; config_key?: string; duration_s: number }
   | { type: "STAGE_SKIPPED"; stage: VisionStage; config_key?: string }
@@ -33,6 +34,15 @@ function reducer(state: PipelineState, action: Action): PipelineState {
   switch (action.type) {
     case "START":
       return { ...INITIAL_STATE, status: "running", videoId: action.videoId };
+    case "STAGE_ACTIVE_ONLY":
+      // Individual stage run — update stage status only, don't change pipeline status
+      return {
+        ...state,
+        stages: {
+          ...state.stages,
+          [action.stage]: { status: "active", started_at: action.timestamp * 1000 },
+        },
+      };
     case "STAGE_STARTED":
       return {
         ...state,
@@ -184,7 +194,7 @@ export function usePipeline() {
   }, [state.videoId]);
 
   const markStageActive = useCallback((stage: VisionStage) => {
-    dispatch({ type: "STAGE_STARTED", stage, timestamp: Date.now() / 1000 });
+    dispatch({ type: "STAGE_ACTIVE_ONLY", stage, timestamp: Date.now() / 1000 });
   }, []);
 
   const markStageComplete = useCallback((stage: VisionStage, opts?: { skipped?: boolean; config_key?: string }) => {
