@@ -27,7 +27,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
   );
   const [selectedTab, setSelectedTab] = useState<TabId>("pipeline");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { state, runPipeline, runStage, rerunStage, cancelPipeline, reset, connected } = usePipeline();
+  const { state, runPipeline, rerunStage, cancelPipeline, reset, connected } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
   const staleness = useStaleness(selectedVideoId, settings);
 
@@ -50,36 +50,16 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     reset();
   };
 
-  // Build the params each stage endpoint expects from current settings
-  const stageParams = (stage: VisionStage): object => {
-    const s = settings.stages;
-    const detKey = state.stages.detect.config_key ?? "";
-    const trackKey = state.stages.track.config_key ?? "";
-    switch (stage) {
-      case "detect":
-        return { model_id: s.detect.model_id, confidence: s.detect.confidence, iou_threshold: s.detect.iou_threshold };
-      case "track":
-        return { det_config_key: detKey };
-      case "ocr":
-        return { track_config_key: trackKey, ocr_interval: s.ocr.ocr_interval };
-      case "classify-teams":
-        return { det_config_key: detKey, stride: s.teams.stride, crop_scale: s.teams.crop_scale };
-      case "court-map":
-        return { det_config_key: detKey };
-      default:
-        return {};
-    }
-  };
-
   const handleRunStage = (stage: VisionStage) => {
-    if (!selectedVideoId) return;
-    runStage(stage, selectedVideoId, stageParams(stage));
+    if (!selectedVideo) return;
+    // Run the full pipeline starting from this stage
+    runPipeline(selectedVideo.id, selectedVideo.url, settings, stage);
   };
 
   const handleRerunStage = (stage: VisionStage) => {
-    if (!selectedVideoId) return;
+    if (!selectedVideo) return;
     const configKey = state.stages[stage].config_key ?? "";
-    rerunStage(stage, selectedVideoId, configKey, stageParams(stage));
+    rerunStage(stage, selectedVideo.id, configKey, settings);
   };
 
   return (

@@ -93,8 +93,8 @@ async function del(path: string): Promise<void> {
   if (!res.ok) throw new ApiError(await res.text(), res.status);
 }
 
-export const runFullPipeline = (videoId: string, settings: import("./types").AnalysisSettings) =>
-  post<{ sse_url: string }>(`/api/pipeline/run/${videoId}`, { settings });
+export const runFullPipeline = (videoId: string, settings: import("./types").AnalysisSettings, fromStage?: string) =>
+  post<{ sse_url: string }>(`/api/pipeline/run/${videoId}`, { settings, from_stage: fromStage ?? null });
 
 export const cancelPipeline = (videoId: string) =>
   post<{ cancelled_stages: string[] }>(`/api/pipeline/cancel/${videoId}`);
