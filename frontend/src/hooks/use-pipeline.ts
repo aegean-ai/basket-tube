@@ -155,7 +155,8 @@ export function usePipeline() {
 
   const runStage = useCallback(
     async (stage: VisionStage, videoId: string, params: object) => {
-      const stageEndpoints: Record<string, (id: string, p: object) => Promise<unknown>> = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stageEndpoints: Record<string, (id: string, p: any) => Promise<unknown>> = {
         detect: api.detectPlayers,
         track: api.trackPlayers,
         ocr: api.ocrJerseys,
