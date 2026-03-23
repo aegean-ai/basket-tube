@@ -183,6 +183,9 @@ cookies.txt
 tts_models/
 whisper_models/
 
+# Internal design docs and plans (not for public repo)
+docs/
+
 # Dolt database files (added by bd init)
 .dolt/
 *.db
