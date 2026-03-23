@@ -15,7 +15,7 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { usePipeline } from "@/hooks/use-pipeline";
 import { useAnalysisSettings } from "@/contexts/analysis-settings-context";
 import { useStaleness } from "@/hooks/use-staleness";
-import type { Video, TabId } from "@/lib/types";
+import type { Video, TabId, VisionStage } from "@/lib/types";
 
 interface AnalysisLayoutProps {
   videos: Video[];
@@ -50,6 +50,38 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     reset();
   };
 
+  // Build the params each stage endpoint expects from current settings
+  const stageParams = (stage: VisionStage): object => {
+    const s = settings.stages;
+    const detKey = state.stages.detect.config_key ?? "";
+    const trackKey = state.stages.track.config_key ?? "";
+    switch (stage) {
+      case "detect":
+        return { model_id: s.detect.model_id, confidence: s.detect.confidence, iou_threshold: s.detect.iou_threshold };
+      case "track":
+        return { det_config_key: detKey };
+      case "ocr":
+        return { track_config_key: trackKey, ocr_interval: s.ocr.ocr_interval };
+      case "classify-teams":
+        return { det_config_key: detKey, stride: s.teams.stride, crop_scale: s.teams.crop_scale };
+      case "court-map":
+        return { det_config_key: detKey };
+      default:
+        return {};
+    }
+  };
+
+  const handleRunStage = (stage: VisionStage) => {
+    if (!selectedVideoId) return;
+    runStage(stage, selectedVideoId, stageParams(stage));
+  };
+
+  const handleRerunStage = (stage: VisionStage) => {
+    if (!selectedVideoId) return;
+    const configKey = state.stages[stage].config_key ?? "";
+    rerunStage(stage, selectedVideoId, configKey, stageParams(stage));
+  };
+
   return (
     <SidebarProvider>
       <AppSidebar
@@ -76,7 +108,12 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
             pipelineContent={
               <>
                 <PipelineCards state={state} />
-                <PipelineTable state={state} staleness={staleness} />
+                <PipelineTable
+                  state={state}
+                  staleness={staleness}
+                  onRunStage={handleRunStage}
+                  onRerunStage={handleRerunStage}
+                />
               </>
             }
             playersContent={
