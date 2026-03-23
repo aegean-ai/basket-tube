@@ -62,13 +62,17 @@ async def pipeline_events(video_id: str):
     run = _orchestrator.get_or_create_run(video_id)
 
     async def event_stream():
+        # If no pipeline is active and bus is empty, nothing to stream
+        if not run.is_active and run.bus.size == 0:
+            return
+
         async for event in run.bus.subscribe(cursor=0):
             data = json.dumps(event, default=str)
             event_type = event.get("event", "message")
             yield f"event: {event_type}\ndata: {data}\n\n"
 
             if event_type in ("pipeline_completed", "pipeline_error"):
-                break
+                return
 
     async def stream_with_keepalive():
         """Merge SSE events with periodic keepalive comments."""
@@ -78,9 +82,10 @@ async def pipeline_events(video_id: str):
             try:
                 chunk = await asyncio.wait_for(event_iter.__anext__(), timeout=keepalive_interval)
                 yield chunk
-                if chunk.startswith(": done"):
-                    return
             except asyncio.TimeoutError:
+                # Only send keepalive if pipeline is still active
+                if not run.is_active:
+                    return
                 yield ": keepalive\n\n"
             except StopAsyncIteration:
                 return
