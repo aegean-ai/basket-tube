@@ -2,8 +2,9 @@
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from api.src.config import settings
 
@@ -72,6 +73,18 @@ def create_app() -> FastAPI:
             {"id": v.id, "title": v.title, "url": v.url}
             for v in get_all_videos()
         ]
+
+    @app.get("/api/video/{video_id}/original")
+    async def serve_video(video_id: str):
+        """Serve the original video file for playback."""
+        from api.src.video_registry import resolve_stem
+        stem = resolve_stem(video_id)
+        if stem is None:
+            raise HTTPException(404, f"Video '{video_id}' not found")
+        video_path = settings.videos_dir / f"{stem}.mp4"
+        if not video_path.exists():
+            raise HTTPException(404, f"Video file not found: {stem}.mp4")
+        return FileResponse(video_path, media_type="video/mp4", filename=f"{stem}.mp4")
 
     return app
 
