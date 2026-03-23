@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { CircleDot, VideoIcon, PlayIcon, SettingsIcon } from "lucide-react";
+import { CircleDot, VideoIcon, PlayIcon, SettingsIcon, WorkflowIcon, UsersIcon, MapIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +19,14 @@ import {
 } from "@/components/ui/sidebar";
 import type { Video } from "@/lib/types";
 
+export type AnalyticsView = "pipeline" | "players" | "court";
+
+const ANALYTICS_VIEWS: { key: AnalyticsView; label: string; icon: React.ElementType }[] = [
+  { key: "pipeline", label: "Pipeline", icon: WorkflowIcon },
+  { key: "players", label: "Players", icon: UsersIcon },
+  { key: "court", label: "Court", icon: MapIcon },
+];
+
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   videos: Video[];
   selectedVideoId?: string;
@@ -25,6 +34,8 @@ interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   onAnalyze: () => void;
   isRunning: boolean;
   onOpenSettings?: () => void;
+  analyticsView: AnalyticsView;
+  onAnalyticsViewChange: (view: AnalyticsView) => void;
 }
 
 export function AppSidebar({
@@ -34,6 +45,8 @@ export function AppSidebar({
   onAnalyze,
   isRunning,
   onOpenSettings,
+  analyticsView,
+  onAnalyticsViewChange,
   ...props
 }: AppSidebarProps) {
   return (
@@ -78,6 +91,26 @@ export function AppSidebar({
                   </SidebarMenuItem>
                 );
               })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Analytics</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {ANALYTICS_VIEWS.map(({ key, label, icon: Icon }) => (
+                <SidebarMenuItem key={key}>
+                  <SidebarMenuButton
+                    isActive={analyticsView === key}
+                    onClick={() => onAnalyticsViewChange(key)}
+                    tooltip={label}
+                  >
+                    <Icon className="shrink-0" />
+                    <span>{label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
