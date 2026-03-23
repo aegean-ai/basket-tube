@@ -1,8 +1,7 @@
-// src/contexts/analysis-settings-context.tsx
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import type { AnalysisSettings, GameContext, AdvancedSettings } from "@/lib/types";
+import { createContext, useCallback, useContext, useState } from "react";
+import type { AnalysisSettings, GameContext, StageSettings } from "@/lib/types";
 import { getSettings, saveSettings } from "@/lib/api";
 
 const DEFAULT_SETTINGS: AnalysisSettings = {
@@ -13,19 +12,20 @@ const DEFAULT_SETTINGS: AnalysisSettings = {
     },
     roster: {},
   },
-  advanced: {
-    confidence: 0.4,
-    iou_threshold: 0.9,
-    ocr_interval: 5,
-    crop_scale: 0.4,
-    stride: 30,
+  stages: {
+    transcribe: { model: "Systran/faster-whisper-medium", use_youtube_captions: true },
+    detect: { model_id: "basketball-player-detection-3-ycjdo/4", confidence: 0.4, iou_threshold: 0.9 },
+    track: { iou_threshold: 0.5, track_activation_threshold: 0.25, lost_track_buffer: 30 },
+    ocr: { model_id: "basketball-jersey-numbers-ocr/3", ocr_interval: 5, n_consecutive: 3 },
+    teams: { embedding_model: "google/siglip-base-patch16-224", n_teams: 2, crop_scale: 0.4, stride: 30 },
+    court_map: { model_id: "basketball-court-detection-2/14", keypoint_confidence: 0.3, anchor_confidence: 0.5 },
   },
 };
 
 interface AnalysisSettingsContextValue {
   settings: AnalysisSettings;
   updateGameContext: (ctx: Partial<GameContext>) => void;
-  updateAdvanced: (adv: Partial<AdvancedSettings>) => void;
+  updateStage: <K extends keyof StageSettings>(stage: K, partial: Partial<StageSettings[K]>) => void;
   loadForVideo: (videoId: string) => Promise<void>;
 }
 
@@ -50,9 +50,15 @@ export function AnalysisSettingsProvider({ children }: { children: React.ReactNo
     [settings, persist]
   );
 
-  const updateAdvanced = useCallback(
-    (partial: Partial<AdvancedSettings>) => {
-      persist({ ...settings, advanced: { ...settings.advanced, ...partial } });
+  const updateStage = useCallback(
+    <K extends keyof StageSettings>(stage: K, partial: Partial<StageSettings[K]>) => {
+      persist({
+        ...settings,
+        stages: {
+          ...settings.stages,
+          [stage]: { ...settings.stages[stage], ...partial },
+        },
+      });
     },
     [settings, persist]
   );
@@ -68,7 +74,7 @@ export function AnalysisSettingsProvider({ children }: { children: React.ReactNo
   }, []);
 
   return (
-    <Ctx.Provider value={{ settings, updateGameContext, updateAdvanced, loadForVideo }}>
+    <Ctx.Provider value={{ settings, updateGameContext, updateStage, loadForVideo }}>
       {children}
     </Ctx.Provider>
   );
