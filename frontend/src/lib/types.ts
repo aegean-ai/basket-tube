@@ -38,8 +38,7 @@ export interface PipelineState {
   videoId?: string;
 }
 
-// UI state
-export type TabId = "pipeline" | "players" | "court" | "chat";
+// UI state (TabId removed — analytics views are in sidebar now)
 
 // API responses
 export interface DownloadResponse {
