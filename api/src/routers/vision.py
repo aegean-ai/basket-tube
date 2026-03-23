@@ -28,6 +28,7 @@ from api.src.artifacts import (
     artifact_path,
     check_stale,
     config_key,
+    delete_artifact,
     read_status,
     status_path_for,
     write_resolved_config,
@@ -463,3 +464,13 @@ async def get_artifact(stage: str, video_id: str, config_key: str):
     if not path.exists():
         raise HTTPException(404, f"Artifact not found: {stage}/{config_key}")
     return json_mod.loads(path.read_text())
+
+
+@router.delete("/artifacts/{stage}/{video_id}")
+async def delete_artifact_endpoint(stage: str, video_id: str, config_key: str):
+    """Delete artifacts for a stage to allow re-run."""
+    stem = _resolve_or_404(video_id)
+    if stage not in STAGE_NAMES:
+        raise HTTPException(404, f"Unknown stage '{stage}'")
+    delete_artifact(settings.data_dir, stage, config_key, stem)
+    return {"deleted": True, "stage": stage, "config_key": config_key}
