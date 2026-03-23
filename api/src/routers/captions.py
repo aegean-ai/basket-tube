@@ -1,5 +1,6 @@
 """Captions timeline router — text timeline for dataset builder."""
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -19,6 +20,11 @@ from api.src.config import settings
 from api.src.video_registry import resolve_stem
 from api.src.schemas.captions import TextTimelineRequest, TextTimelineResponse
 from api.src.services.text_timeline_service import build_timeline
+
+try:
+    import logfire
+except ImportError:
+    logfire = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +75,8 @@ async def timeline(video_id: str, req: TextTimelineRequest | None = None):
     write_status(sidecar, "active")
     try:
         transcript = json.loads(transcription_path.read_text())
-        result = build_timeline(
+        result = await asyncio.to_thread(
+            build_timeline,
             transcript,
             source=source,
             lexicon_version=req.lexicon_version,
@@ -78,6 +85,9 @@ async def timeline(video_id: str, req: TextTimelineRequest | None = None):
 
         atomic_write_json(out, result)
         write_status(sidecar, "complete", config_key=cfg_key)
+
+        if logfire:
+            logfire.info("pipeline.timeline", video_id=video_id, n_segments=len(result["segments"]))
 
         return TextTimelineResponse(
             video_id=video_id,
