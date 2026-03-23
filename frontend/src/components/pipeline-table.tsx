@@ -74,6 +74,7 @@ function StageRow({
   stage,
   allStages,
   isStale,
+  pipelineRunning,
   onRunStage,
   onRerunStage,
 }: {
@@ -84,6 +85,7 @@ function StageRow({
   stage: StageState;
   allStages: PipelineState["stages"];
   isStale?: boolean;
+  pipelineRunning?: boolean;
   onRunStage?: (stage: VisionStage) => void;
   onRerunStage?: (stage: VisionStage) => void;
 }) {
@@ -92,9 +94,12 @@ function StageRow({
 
   const ready = isStageReady(stageKey, allStages);
 
+  // Disable all action buttons while any stage is actively running
+  const actionsDisabled = !!pipelineRunning;
+
   let actionButton: React.ReactNode = null;
   if (stage.status === "pending") {
-    if (ready) {
+    if (ready && !actionsDisabled) {
       actionButton = (
         <Button variant="outline" size="sm" onClick={() => onRunStage?.(stageKey)}>
           <PlayIcon className="size-3.5 mr-1" />
@@ -103,7 +108,7 @@ function StageRow({
       );
     } else {
       actionButton = (
-        <Button variant="outline" size="sm" disabled title="Dependencies not yet complete">
+        <Button variant="outline" size="sm" disabled title={actionsDisabled ? "Pipeline is running" : "Dependencies not yet complete"}>
           <PlayIcon className="size-3.5 mr-1" />
           Run
         </Button>
@@ -113,21 +118,21 @@ function StageRow({
     actionButton = null;
   } else if (stage.status === "complete") {
     actionButton = (
-      <Button variant={isStale ? "outline" : "ghost"} size="sm" onClick={() => onRerunStage?.(stageKey)}>
+      <Button variant={isStale ? "outline" : "ghost"} size="sm" disabled={actionsDisabled} onClick={() => onRerunStage?.(stageKey)}>
         <RotateCcwIcon className="size-3.5 mr-1" />
         Re-run
       </Button>
     );
   } else if (stage.status === "skipped") {
     actionButton = (
-      <Button variant="outline" size="sm" onClick={() => onRunStage?.(stageKey)}>
+      <Button variant="outline" size="sm" disabled={actionsDisabled} onClick={() => onRunStage?.(stageKey)}>
         <PlayIcon className="size-3.5 mr-1" />
         Run
       </Button>
     );
   } else if (stage.status === "error") {
     actionButton = (
-      <Button variant="outline" size="sm" className="text-destructive" onClick={() => onRerunStage?.(stageKey)}>
+      <Button variant="outline" size="sm" className="text-destructive" disabled={actionsDisabled} onClick={() => onRerunStage?.(stageKey)}>
         <RotateCcwIcon className="size-3.5 mr-1" />
         Re-run
       </Button>
@@ -172,6 +177,7 @@ interface PipelineTableProps {
 }
 
 export function PipelineTable({ state, staleness, onRunStage, onRerunStage }: PipelineTableProps) {
+  const pipelineRunning = state.status === "running";
   return (
     <div className="px-4 lg:px-6">
       <Table>
@@ -195,6 +201,7 @@ export function PipelineTable({ state, staleness, onRunStage, onRerunStage }: Pi
               stage={state.stages[key]}
               allStages={state.stages}
               isStale={staleness?.[key]?.stale}
+              pipelineRunning={pipelineRunning}
               onRunStage={onRunStage}
               onRerunStage={onRerunStage}
             />
