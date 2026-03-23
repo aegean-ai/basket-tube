@@ -11,42 +11,48 @@ An [aegean.ai](https://aegean.ai/products/tech-demonstrators/sports-analytics) t
 ```mermaid
 flowchart LR
     subgraph Input
-        YT[YouTube URL]
+        YT[YouTube URL / Local Video]
     end
 
     subgraph "CPU API :8080"
         DL[Download<br/>yt-dlp]
         STT[Transcribe<br/>Whisper]
         TL[Text Timeline<br/>Lexicon normalization]
-        ORCH[Vision Orchestrator<br/>Stage sequencing + caching]
+        ORCH["Pipeline Orchestrator<br/>Async DAG scheduling<br/>SSE progress broadcast"]
+        STALE[Staleness Detection<br/>Config key comparison]
     end
 
     subgraph "GPU Inference :8090"
         DET[Detect Players<br/>RF-DETR]
-        TRK[Track Players<br/>SAM2]
+        TRK[Track Players<br/>ByteTrack]
         TEAM[Classify Teams<br/>SigLIP + K-means]
         OCR[Jersey OCR<br/>SmolVLM2]
         COURT[Court Mapping<br/>Keypoint homography]
     end
 
-    subgraph Output
-        ART[Analysis Artifacts<br/>JSON + annotated video]
+    subgraph "Frontend :8501"
+        UI["Next.js + shadcn/ui<br/>SSE-driven pipeline table<br/>Per-stage settings sidebar"]
     end
 
     YT --> DL --> STT --> TL
     DL --> ORCH
-    ORCH --> DET --> TRK --> ART
-    DET --> TEAM --> ART
-    DET --> COURT --> ART
-    TRK --> OCR --> ART
+    ORCH --> DET --> TRK
+    DET --> TEAM
+    DET --> COURT
+    TRK --> OCR
+    ORCH -- "SSE events" --> UI
+    UI -- "POST /pipeline/run" --> ORCH
+    UI -- "POST /pipeline/staleness" --> STALE
 
     classDef cpu fill:#0277bd,color:#fff,stroke:#01579b
     classDef gpu fill:#e65100,color:#fff,stroke:#bf360c
     classDef io fill:#4527a0,color:#fff,stroke:#311b92
+    classDef fe fill:#2e7d32,color:#fff,stroke:#1b5e20
 
-    class YT,ART io
-    class DL,STT,TL,ORCH cpu
+    class YT io
+    class DL,STT,TL,ORCH,STALE cpu
     class DET,TRK,TEAM,OCR,COURT gpu
+    class UI fe
 ```
 
 ## Quick Start
@@ -60,35 +66,39 @@ cp .env.example .env
 docker compose --profile nvidia up -d
 
 # 3. Open
+# Frontend: http://localhost:8501
 # API:      http://localhost:8080
-# Notebook: http://localhost:8888
 ```
 
 ## Containers
 
 | Container | Port | Dockerfile | Purpose |
 |-----------|------|------------|---------|
-| `basket-tube-api` | 8080 | `Dockerfile.api` | CPU orchestrator — download, transcribe, vision routing, captions |
-| `basket-tube-inference` | 8090 | `Dockerfile.gpu` | GPU inference — all 5 vision model endpoints |
-| `basket-tube-notebook` | 8888 | `Dockerfile.gpu` | JupyterLab for prototyping (reuses GPU image) |
+| `basket-tube-api` | 8080 | `Dockerfile.api` | CPU orchestrator — async pipeline scheduling, SSE, settings, staleness |
+| `basket-tube-inference` | 8090 | `Dockerfile.gpu` | GPU inference — 5 vision model endpoints with progress file reporting |
+| `basket-tube-frontend` | 8501 | `frontend/Dockerfile` | Next.js + shadcn/ui — SSE-driven pipeline UI with per-stage settings |
+| `basket-tube-whisper` | 8000 | speaches image | Whisper STT (faster-whisper-medium) |
 
-All containers share `./pipeline_data` via Docker volume and `video_registry.yml` read-only.
+All containers run as non-root `appuser` (UID/GID from host). Shared `./pipeline_data` volume and `video_registry.yml` read-only.
 
-## API Orchestration Model
+## Async Pipeline Orchestrator
 
-The CPU API orchestrates the vision pipeline **synchronously per request**:
+The CPU API runs a **fully asynchronous pipeline orchestrator** with dependency-aware parallelism and real-time progress via SSE:
 
-1. Client calls a stage endpoint (e.g. `POST /api/vision/detect/{video_id}`)
-2. CPU API checks if cached output exists → returns `skipped: true` immediately if so
-3. CPU API writes an "active" status sidecar to prevent duplicate runs
-4. CPU API makes a single `await httpx.post()` to the GPU service at `:8090` — async I/O (non-blocking for other FastAPI requests) but the client waits for the response
-5. GPU service processes all video frames, writes result JSON atomically (`.tmp` + rename)
-6. CPU API writes "complete" status sidecar and returns the response
+1. Client calls `POST /api/pipeline/run/{video_id}` — returns `202 Accepted` immediately
+2. Orchestrator schedules stages respecting the dependency DAG:
+   - `detect` runs first
+   - `track`, `classify-teams`, `court-map` run **concurrently** after detect
+   - `ocr` runs after track completes
+3. Each stage emits SSE events (`stage_started`, `stage_progress`, `stage_completed`, `stage_skipped`, `stage_error`)
+4. GPU service writes atomic `_progress.json` files during frame processing; orchestrator polls every 2s and forwards as `stage_progress` events
+5. Frontend receives events via `EventSource` and updates the pipeline table in real-time
+6. **Broadcast EventBus** — append-only event log with per-subscriber cursors supports multiple tabs, browser refresh reconnect, and late-joining clients
 
-**Key design decisions:**
-- **No background task queue** — each request is synchronous from the client's perspective
-- **Stages are independent** — the client decides when to call the next stage, not the API
-- **Config-key namespacing** — each parameter combination produces a unique output directory (`c-{hash}`), so changing confidence or swapping models never returns stale results
+**Key design properties:**
+- **Non-blocking** — `asyncio.to_thread()` for yt_dlp, `httpx.AsyncClient` for Whisper, `httpx` for GPU calls
+- **Config-key caching** — each parameter combination produces a unique output directory (`c-{hash}`); cached stages return `stage_skipped` instantly
+- **Staleness detection** — `POST /api/pipeline/staleness/{video_id}` compares current settings against cached artifacts; frontend shows amber "Outdated" badge when settings change
 - **Crash recovery** — stale "active" sidecars older than 600s are automatically cleared
 
 ## Pipeline Stages
@@ -96,27 +106,60 @@ The CPU API orchestrates the vision pipeline **synchronously per request**:
 | Stage | Endpoint | GPU Service | Output |
 |-------|----------|-------------|--------|
 | **Download** | `POST /api/download` | — (CPU) | `videos/{stem}.mp4` |
-| **Transcribe** | `POST /api/transcribe/{id}` | — (CPU, Whisper) | `transcriptions/whisper/{stem}.json` |
+| **Transcribe** | `POST /api/transcribe/{id}` | Whisper :8000 | `transcriptions/whisper/{stem}.json` |
 | **Text Timeline** | `POST /api/captions/timeline/{id}` | — (CPU) | `analysis/text_timeline/{config}/{stem}.json` |
 | **Detect** | `POST /api/vision/detect/{id}` | `/api/detect` | `analysis/detections/{config}/{stem}.json` |
 | **Track** | `POST /api/vision/track/{id}` | `/api/track` | `analysis/tracks/{config}/{stem}.json` |
 | **Classify Teams** | `POST /api/vision/classify-teams/{id}` | `/api/classify-teams` | `analysis/teams/{config}/{stem}.json` |
 | **OCR** | `POST /api/vision/ocr/{id}` | `/api/ocr` | `analysis/jerseys/{config}/{stem}.json` |
 | **Court Map** | `POST /api/vision/court-map/{id}` | `/api/keypoints` | `analysis/court/{config}/{stem}.json` |
-| **Render** | `POST /api/vision/render/{id}` | — (CPU, stub) | `analysis/renders/{config}/{stem}.mp4` |
-| **Status** | `GET /api/vision/status/{id}` | — | Pipeline stage status |
+
+### Pipeline Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/pipeline/run/{id}` | Start full pipeline (202 + SSE URL) |
+| `POST /api/pipeline/run/{id}?from_stage=ocr` | Re-run from a specific stage |
+| `POST /api/pipeline/cancel/{id}` | Cancel active pipeline |
+| `GET /api/pipeline/events/{id}` | SSE event stream (with 15s keepalive) |
+| `POST /api/pipeline/staleness/{id}` | Check which stages are outdated |
+| `DELETE /api/vision/artifacts/{stage}/{id}` | Delete cached artifacts for re-run |
+| `GET /api/vision/status/{id}` | Current status of all stages |
 
 ### Stage Dependencies
 
 ```
-detect (1)
-  ├── track (2) ──────────┐
-  │     └── ocr (4) ──────┤
-  ├── classify-teams (3) ──┼──▶ render (6)
-  └── court-map (5) ──────┘
+detect
+  ├── track ──────────────┐
+  │     └── ocr ──────────┤
+  ├── classify-teams ──────┼──▶ render
+  └── court-map ──────────┘
 ```
 
-Stages 2, 3, 5 can run after 1. Stage 4 (OCR) needs tracks for temporal validation. Calling a stage without its prerequisites returns HTTP 409.
+After detect completes, track + classify-teams + court-map run **in parallel**. OCR starts after track. Calling a stage without prerequisites returns HTTP 409.
+
+## Frontend
+
+Next.js 16 + React 19 + shadcn/ui with:
+
+- **SSE-driven pipeline table** — real-time stage status, progress bars with frame percentages, elapsed timers
+- **Per-stage action buttons** — Run/Re-run per stage (disabled while pipeline is active to prevent state corruption)
+- **Per-stage settings dialog** — two-column sidebar layout (Foreign Whispers pattern) with model selectors, confidence sliders, and hyperparameter controls per stage
+- **Staleness detection** — amber "Outdated" badge when cached artifacts don't match current settings (debounced 500ms check on settings change)
+- **Settings persistence** — per-video settings saved to backend, with automatic migration from legacy flat format
+
+## Per-Stage Settings
+
+Each pipeline stage exposes configurable parameters in the settings dialog:
+
+| Stage | Model Config | Parameters |
+|-------|-------------|------------|
+| **Transcribe** | Whisper variant | Use YouTube captions toggle |
+| **Detect** | RF-DETR model ID | Confidence, IOU threshold |
+| **Track** | ByteTrack (algorithmic) | IOU threshold, activation threshold, lost track buffer |
+| **OCR** | VLM model ID | OCR interval (frames), consecutive reads threshold |
+| **Teams** | SigLIP embedding model | Number of teams, crop scale, sampling stride |
+| **Court Map** | Keypoint model ID | Keypoint confidence, anchor confidence |
 
 ## Project Structure
 
@@ -124,45 +167,74 @@ Stages 2, 3, 5 can run after 1. Stage 4 (OCR) needs tracks for temporal validati
 basket-tube/
 ├── api/src/                         # CPU API (FastAPI)
 │   ├── main.py                      # App factory
-│   ├── core/
-│   │   ├── config.py                # Settings (FW_ env prefix)
-│   │   ├── artifacts.py             # Config keys, paths, status sidecars
-│   │   └── video_registry.py        # video_registry.yml loader
+│   ├── config.py                    # Settings (FW_ env prefix)
+│   ├── artifacts.py                 # Config keys, paths, status sidecars, deletion
+│   ├── video_registry.py            # video_registry.yml loader
 │   ├── routers/
-│   │   ├── download.py              # POST /api/download
-│   │   ├── transcribe.py            # POST /api/transcribe/{id}
-│   │   ├── vision.py                # 6 vision stage endpoints + status
-│   │   └── captions.py              # POST /api/captions/timeline/{id}
-│   ├── schemas/                     # Pydantic models
-│   └── services/                    # Business logic
-│       ├── vision_service.py        # HTTP client to GPU service
-│       └── text_timeline_service.py # Basketball lexicon normalization
-├── basket_tube/                     # GPU inference package
+│   │   ├── pipeline.py              # Pipeline run, cancel, SSE events, staleness
+│   │   ├── vision.py                # 6 vision stage endpoints + status + DELETE
+│   │   ├── download.py              # POST /api/download (async via to_thread)
+│   │   ├── transcribe.py            # POST /api/transcribe/{id} (async httpx)
+│   │   ├── captions.py              # POST /api/captions/timeline/{id}
+│   │   └── settings.py              # GET/PUT per-video settings with migration
+│   ├── schemas/
+│   │   ├── pipeline.py              # Pipeline run/cancel/event models
+│   │   ├── vision.py                # Stage request/response models
+│   │   └── settings.py              # Stage-keyed settings + flat→keyed migration
+│   └── services/
+│       ├── pipeline_orchestrator.py  # Async DAG scheduler + progress polling
+│       ├── event_bus.py              # Broadcast SSE bus (append-only + cursors)
+│       ├── vision_service.py         # HTTP client to GPU service
+│       ├── whisper_service.py        # Async Whisper HTTP client (httpx)
+│       └── text_timeline_service.py  # Basketball lexicon normalization
+├── basket_tube/                      # GPU inference package
 │   └── inference/
-│       ├── main.py                  # FastAPI app (all 5 endpoints)
-│       ├── roboflow/models.py       # RF-DETR, keypoints, OCR model loading
+│       ├── main.py                   # FastAPI app (5 endpoints + progress writes)
+│       ├── progress.py               # Atomic _progress.json writer
+│       ├── roboflow/models.py        # RF-DETR, keypoints, OCR model loading
 │       └── vision/
-│           ├── tracker.py           # SAM2Tracker
-│           └── classifier.py        # TeamClassifier wrapper
-├── notebooks/                       # Jupyter notebooks
-├── frontend/                        # Next.js + shadcn/ui (to be wired)
-├── pipeline_data/api/               # All artifacts (volume-mounted)
-│   ├── videos/                      # Source MP4s
-│   ├── youtube_captions/            # yt-dlp caption JSON
-│   ├── transcriptions/whisper/      # Whisper output
-│   └── analysis/                    # Vision pipeline outputs
-│       ├── detections/{config}/     # RF-DETR per-frame boxes
-│       ├── tracks/{config}/         # SAM2 masks + tracker IDs
-│       ├── teams/{config}/          # Team assignments + palette
-│       ├── jerseys/{config}/        # Validated jersey numbers
-│       ├── court/{config}/          # Court coordinates
-│       ├── renders/{config}/        # Annotated videos
-│       └── text_timeline/{config}/  # Normalized caption segments
-├── video_registry.yml               # Video catalog
-├── Dockerfile.api                   # CPU API image
-├── Dockerfile.gpu                   # GPU inference image (+ notebook)
-└── docker-compose.yml               # 3 services
+│           ├── tracker.py            # SAM2Tracker / ByteTrack
+│           └── classifier.py         # TeamClassifier (SigLIP + K-means)
+├── frontend/                         # Next.js + shadcn/ui
+│   └── src/
+│       ├── app/                      # Next.js App Router
+│       ├── components/
+│       │   ├── analysis-layout.tsx   # Main layout + pipeline wiring
+│       │   ├── pipeline-table.tsx    # Stage table + action buttons + progress bars
+│       │   ├── pipeline-status-bar.tsx # Live status with % progress
+│       │   ├── settings-dialog.tsx   # Per-stage sidebar settings
+│       │   ├── players-table.tsx     # Identified players roster
+│       │   ├── court-view.tsx        # Bird's-eye court visualization
+│       │   └── ...
+│       ├── hooks/
+│       │   ├── use-pipeline.ts       # SSE-driven pipeline state machine
+│       │   ├── use-sse.ts            # EventSource hook (direct to API)
+│       │   └── use-staleness.ts      # Debounced staleness check
+│       ├── contexts/
+│       │   └── analysis-settings-context.tsx  # Stage-keyed settings provider
+│       └── lib/
+│           ├── api.ts                # Fetch wrappers + pipeline/staleness calls
+│           ├── types.ts              # Stage settings, staleness, pipeline types
+│           └── stage-deps.ts         # Dependency graph + cascade computation
+├── notebooks/                        # Jupyter notebooks
+├── pipeline_data/api/                # All artifacts (volume-mounted)
+├── video_registry.yml                # Video catalog
+├── Dockerfile.api                    # CPU API image (non-root appuser)
+├── Dockerfile.gpu                    # GPU inference image (non-root appuser)
+└── docker-compose.yml                # 4 services (api, inference, frontend, whisper)
 ```
+
+## Observability
+
+Traces and spans are sent to Pydantic Logfire at https://logfire-us.pydantic.dev/pantelis/basket-tube
+
+Instrumented spans:
+- `pipeline.run` — full pipeline execution (parent span)
+- `pipeline.stage.{name}` — individual stage spans
+- `gpu.{stage}` — GPU service HTTP calls
+- `whisper.transcribe` — Whisper STT calls
+- `pipeline.download` — Video download
+- `pipeline.timeline` — Text timeline construction
 
 ## Development
 
@@ -189,11 +261,12 @@ docker compose --profile nvidia down
 | `ROBOFLOW_API_KEY` | GPU | Roboflow API key |
 | `INFERENCE_MODE` | GPU | `local` (GPU) or `remote` (Roboflow cloud) |
 | `FW_INFERENCE_GPU_URL` | API | GPU service URL (default `http://localhost:8090`) |
-| `FW_WHISPER_MODEL` | API | Whisper model size (default `base`) |
+| `FW_WHISPER_API_URL` | API | Whisper service URL (default `http://localhost:8000`) |
+| `FW_LOGFIRE_WRITE_TOKEN` | API | Pydantic Logfire write token |
 
 ### Requirements
 
 - Python 3.11
 - NVIDIA GPU + CUDA 12.8 (for GPU inference)
 - Docker + Docker Compose
-- ffmpeg
+- Node.js 20+ (for frontend development)
