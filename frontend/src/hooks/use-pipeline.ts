@@ -181,7 +181,11 @@ export function usePipeline() {
     if (state.videoId) await api.cancelPipeline(state.videoId);
   }, [state.videoId]);
 
+  const markStageComplete = useCallback((stage: VisionStage) => {
+    dispatch({ type: "STAGE_COMPLETE", stage, duration_s: 0 });
+  }, []);
+
   const reset = useCallback(() => dispatch({ type: "RESET" }), []);
 
-  return { state, runPipeline, rerunStage, cancelPipeline, reset, connected };
+  return { state, runPipeline, rerunStage, cancelPipeline, markStageComplete, reset, connected };
 }

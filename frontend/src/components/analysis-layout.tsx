@@ -28,7 +28,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
   );
   const [selectedTab, setSelectedTab] = useState<TabId>("pipeline");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { state, runPipeline, rerunStage, cancelPipeline, reset, connected } = usePipeline();
+  const { state, runPipeline, rerunStage, cancelPipeline, markStageComplete, reset, connected } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
   const staleness = useStaleness(selectedVideoId, settings);
 
@@ -60,6 +60,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
       setDirectRunning("download");
       try {
         await downloadVideo(selectedVideo.url === "local" ? selectedVideo.id : selectedVideo.url);
+        markStageComplete("download");
       } finally {
         setDirectRunning(null);
       }
@@ -69,6 +70,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
       setDirectRunning("transcribe");
       try {
         await transcribeVideo(selectedVideo.id, settings.stages.transcribe.use_youtube_captions);
+        markStageComplete("transcribe");
       } finally {
         setDirectRunning(null);
       }
