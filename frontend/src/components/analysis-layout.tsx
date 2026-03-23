@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/app-sidebar";
-import { AnalysisTabs } from "@/components/analysis-tabs";
+import { AppSidebar, type AnalyticsView } from "@/components/app-sidebar";
 import { PipelineStatusBar } from "@/components/pipeline-status-bar";
 import { PipelineTable } from "@/components/pipeline-table";
 import { PipelineCards } from "@/components/pipeline-cards";
@@ -16,7 +15,7 @@ import { usePipeline } from "@/hooks/use-pipeline";
 import { useAnalysisSettings } from "@/contexts/analysis-settings-context";
 import { useStaleness } from "@/hooks/use-staleness";
 import * as api from "@/lib/api";
-import type { Video, TabId, VisionStage } from "@/lib/types";
+import type { Video, VisionStage } from "@/lib/types";
 
 interface AnalysisLayoutProps {
   videos: Video[];
@@ -26,7 +25,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
   const [selectedVideoId, setSelectedVideoId] = useState<string | undefined>(
     videos[0]?.id
   );
-  const [selectedTab, setSelectedTab] = useState<TabId>("pipeline");
+  const [analyticsView, setAnalyticsView] = useState<AnalyticsView>("pipeline");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { state, runPipeline, cancelPipeline, markStageActive, markStageComplete, markStageError, reset, connected } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
@@ -120,12 +119,10 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
 
   /**
    * Re-run = delete artifact + run stage.
-   * The API endpoint clears cache automatically when artifact is missing.
    */
   const handleRerunStage = async (stage: VisionStage) => {
     if (!selectedVideo) return;
     const configKey = state.stages[stage].config_key ?? "";
-    // Map stage name to artifact directory name
     const artifactDir: Record<string, string> = {
       detect: "detections", track: "tracks", ocr: "jerseys",
       "classify-teams": "teams", "court-map": "court", render: "renders",
@@ -146,6 +143,8 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
         onAnalyze={handleAnalyze}
         isRunning={state.status === "running"}
         onOpenSettings={() => setSettingsOpen(true)}
+        analyticsView={analyticsView}
+        onAnalyticsViewChange={setAnalyticsView}
       />
       <SidebarInset>
         <div className="flex flex-1 flex-col gap-4 p-4">
@@ -156,31 +155,31 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
             <VideoCanvas videoId={selectedVideoId} />
           </div>
 
-          {/* Tabbed panels */}
-          <AnalysisTabs
-            selectedTab={selectedTab}
-            onTabChange={setSelectedTab}
-            pipelineContent={
-              <>
-                <PipelineCards state={state} />
-                <PipelineTable
-                  state={state}
-                  staleness={staleness}
-                  onRunStage={handleRunStage}
-                  onRerunStage={handleRerunStage}
-                />
-              </>
-            }
-            playersContent={
-              <PlayersTable
-                videoId={selectedVideoId}
-                pipelineState={state}
-                roster={settings.game_context.roster}
+          {/* Chat — always visible below video */}
+          <ChatPanel />
+
+          {/* Analytics panel — selected from sidebar */}
+          {analyticsView === "pipeline" && (
+            <>
+              <PipelineCards state={state} />
+              <PipelineTable
+                state={state}
+                staleness={staleness}
+                onRunStage={handleRunStage}
+                onRerunStage={handleRerunStage}
               />
-            }
-            courtContent={<CourtView videoId={selectedVideoId} />}
-            chatContent={<ChatPanel />}
-          />
+            </>
+          )}
+          {analyticsView === "players" && (
+            <PlayersTable
+              videoId={selectedVideoId}
+              pipelineState={state}
+              roster={settings.game_context.roster}
+            />
+          )}
+          {analyticsView === "court" && (
+            <CourtView videoId={selectedVideoId} />
+          )}
         </div>
       </SidebarInset>
 
