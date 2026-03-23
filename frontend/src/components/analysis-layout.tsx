@@ -15,6 +15,7 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { usePipeline } from "@/hooks/use-pipeline";
 import { useAnalysisSettings } from "@/contexts/analysis-settings-context";
 import { useStaleness } from "@/hooks/use-staleness";
+import { downloadVideo, transcribeVideo } from "@/lib/api";
 import type { Video, TabId, VisionStage } from "@/lib/types";
 
 interface AnalysisLayoutProps {
@@ -50,18 +51,27 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     reset();
   };
 
+  const [directRunning, setDirectRunning] = useState<string | null>(null);
+
   const handleRunStage = async (stage: VisionStage) => {
     if (!selectedVideo) return;
     // Download and transcribe are independent of the vision DAG — call directly
     if (stage === "download") {
-      runPipeline(selectedVideo.id, selectedVideo.url, settings);
+      setDirectRunning("download");
+      try {
+        await downloadVideo(selectedVideo.url === "local" ? selectedVideo.id : selectedVideo.url);
+      } finally {
+        setDirectRunning(null);
+      }
       return;
     }
     if (stage === "transcribe") {
-      const { transcribeVideo } = await import("@/lib/api");
+      setDirectRunning("transcribe");
       try {
         await transcribeVideo(selectedVideo.id, settings.stages.transcribe.use_youtube_captions);
-      } catch { /* ignore — user can retry */ }
+      } finally {
+        setDirectRunning(null);
+      }
       return;
     }
     // Vision stages go through the pipeline orchestrator
