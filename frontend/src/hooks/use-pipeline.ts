@@ -111,8 +111,8 @@ export function usePipeline() {
         // 3. Detect
         const detectResult = await runStage(dispatch, "detect", () =>
           api.detectPlayers(videoId, {
-            confidence: settings.advanced.confidence,
-            iou_threshold: settings.advanced.iou_threshold,
+            confidence: settings.stages.detect.confidence,
+            iou_threshold: settings.stages.detect.iou_threshold,
           })
         );
         const detKey = detectResult.config_key!;
@@ -127,7 +127,7 @@ export function usePipeline() {
         const ocrResult = await runStage(dispatch, "ocr", () =>
           api.ocrJerseys(videoId, {
             track_config_key: trackKey,
-            ocr_interval: settings.advanced.ocr_interval,
+            ocr_interval: settings.stages.ocr.ocr_interval,
           })
         );
 
@@ -135,8 +135,8 @@ export function usePipeline() {
         const teamsResult = await runStage(dispatch, "classify-teams", () =>
           api.classifyTeams(videoId, {
             det_config_key: detKey,
-            stride: settings.advanced.stride,
-            crop_scale: settings.advanced.crop_scale,
+            stride: settings.stages.teams.stride,
+            crop_scale: settings.stages.teams.crop_scale,
           })
         );
 
