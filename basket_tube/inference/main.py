@@ -716,12 +716,44 @@ async def render(req: InferenceRequest):
             video_info = sv.VideoInfo.from_video_path(str(video_path))
             total_frames = video_info.total_frames
 
-            # Build lookup tables from artifacts
-            team_map = {}  # tracker_id -> team_id (0 or 1)
-            for a in teams_data.get("assignments", []):
-                team_map[a["tracker_id"]] = a["team_id"]
+            # --- Build lookup tables from artifacts ---
 
-            jersey_map = jerseys_data.get("players", {})  # str(tracker_id) -> str(number)
+            # Jersey map: str(tracker_id) -> str(number)
+            jersey_map = jerseys_data.get("players", {})
+
+            # Team assignments: (frame_index, detection_index) -> team_id
+            # Also build tracker_id -> team_id by majority vote
+            team_by_frame_det = {}
+            tracker_team_votes: dict[int, list[int]] = {}
+            for a in teams_data.get("assignments", []):
+                fi = a.get("frame_index", -1)
+                di = a.get("detection_index", -1)
+                tid_val = a.get("team_id", 0)
+                team_by_frame_det[(fi, di)] = tid_val
+
+            # Map detection_index to tracker_id using det + track frames
+            det_frames = {f["frame_index"]: f for f in det_data.get("frames", [])}
+            track_frames = {f["frame_index"]: f for f in track_data.get("frames", [])}
+
+            # Build tracker_id -> team_id via majority vote across all assigned frames
+            for a in teams_data.get("assignments", []):
+                fi = a.get("frame_index", -1)
+                di = a.get("detection_index", -1)
+                team_id = a.get("team_id", 0)
+
+                # Get tracker_ids from track frame, match by detection_index
+                tf = track_frames.get(fi)
+                if tf is None:
+                    continue
+                tids = tf.get("tracker_ids", [])
+                if di < len(tids):
+                    tid = tids[di]
+                    tracker_team_votes.setdefault(tid, []).append(team_id)
+
+            # Majority vote for each tracker
+            tracker_team_map: dict[int, int] = {}
+            for tid, votes in tracker_team_votes.items():
+                tracker_team_map[tid] = max(set(votes), key=votes.count)
 
             # Team colors from palette
             palette = teams_data.get("palette", {})
@@ -740,12 +772,13 @@ async def render(req: InferenceRequest):
                 color_lookup=sv.ColorLookup.INDEX,
             )
 
-            # Build per-frame track data lookup
-            track_frames = {f["frame_index"]: f for f in track_data.get("frames", [])}
-
             # Temp output path then compress
             out.parent.mkdir(parents=True, exist_ok=True)
             tmp_video = out.parent / f"{stem}_raw.mp4"
+
+            _log_info("render.start video_id={video_id} frames={n} trackers_with_team={nt} trackers_with_jersey={nj}",
+                       video_id=req.video_id, n=total_frames,
+                       nt=len(tracker_team_map), nj=len(jersey_map))
 
             with sv.VideoSink(str(tmp_video), video_info) as sink:
                 for idx, frame in enumerate(sv.get_video_frames_generator(str(video_path))):
@@ -757,32 +790,37 @@ async def render(req: InferenceRequest):
                         sink.write_frame(frame)
                         continue
 
-                    # Reconstruct detections from track data
+                    # Track data: tracker_ids + xyxy
                     xyxy_list = track_frame.get("xyxy", [])
-                    tracker_ids = track_frame.get("tracker_id", [])
-                    class_ids = track_frame.get("class_id", [])
+                    tracker_ids = track_frame.get("tracker_ids", [])
 
-                    if not xyxy_list:
+                    if not xyxy_list or not tracker_ids:
                         sink.write_frame(frame)
                         continue
+
+                    # Use detection class_ids to filter to players
+                    det_frame = det_frames.get(idx)
+                    if det_frame is not None:
+                        det_class_ids = det_frame.get("class_id", [])
+                    else:
+                        det_class_ids = []
 
                     xyxy = np.array(xyxy_list, dtype=np.float32)
                     tracker_id = np.array(tracker_ids, dtype=int)
-                    class_id = np.array(class_ids, dtype=int)
 
-                    # Filter to player classes only
-                    player_mask = np.isin(class_id, PLAYER_CLASS_IDS)
-                    if not player_mask.any():
+                    # Filter: keep only entries that have tracker_ids (tracks may have fewer entries than detections)
+                    n = min(len(xyxy), len(tracker_id))
+                    xyxy = xyxy[:n]
+                    tracker_id = tracker_id[:n]
+
+                    if n == 0:
                         sink.write_frame(frame)
                         continue
 
-                    xyxy = xyxy[player_mask]
-                    tracker_id = tracker_id[player_mask]
-
                     detections = sv.Detections(xyxy=xyxy, tracker_id=tracker_id)
 
-                    # Build team color lookup and labels
-                    teams = np.array([team_map.get(int(tid), 0) for tid in tracker_id], dtype=int)
+                    # Team color lookup and jersey labels per tracker
+                    teams = np.array([tracker_team_map.get(int(tid), 0) for tid in tracker_id], dtype=int)
                     labels = [f"#{jersey_map.get(str(int(tid)), '?')}" for tid in tracker_id]
 
                     annotated = frame.copy()
