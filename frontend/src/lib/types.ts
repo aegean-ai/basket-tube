@@ -174,6 +174,13 @@ export interface AnalysisSettings {
   stages: StageSettings;
 }
 
+// Staleness
+export interface StalenessEntry {
+  stale: boolean;
+  reason?: string;
+}
+export type StalenessMap = Record<string, StalenessEntry>;
+
 // Chat
 export interface ChatMessage {
   id: string;

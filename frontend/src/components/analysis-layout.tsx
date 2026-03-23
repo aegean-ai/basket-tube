@@ -14,6 +14,7 @@ import { VideoCanvas } from "@/components/video-canvas";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { usePipeline } from "@/hooks/use-pipeline";
 import { useAnalysisSettings } from "@/contexts/analysis-settings-context";
+import { useStaleness } from "@/hooks/use-staleness";
 import type { Video, TabId } from "@/lib/types";
 
 interface AnalysisLayoutProps {
@@ -28,6 +29,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { state, runPipeline, runStage, rerunStage, cancelPipeline, reset, connected } = usePipeline();
   const { settings, loadForVideo } = useAnalysisSettings();
+  const staleness = useStaleness(selectedVideoId, settings);
 
   const selectedVideo = videos.find((v) => v.id === selectedVideoId);
 
@@ -74,7 +76,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
             pipelineContent={
               <>
                 <PipelineCards state={state} />
-                <PipelineTable state={state} />
+                <PipelineTable state={state} staleness={staleness} />
               </>
             }
             playersContent={
