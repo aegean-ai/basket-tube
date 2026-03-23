@@ -74,7 +74,7 @@ event: stage_progress
 data: {"stage": "detect", "progress": 0.45, "frame": 270, "total_frames": 600}
 
 event: stage_completed
-data: {"stage": "detect", "duration_s": 342.1}
+data: {"stage": "detect", "config_key": "c-baf1922", "duration_s": 342.1}
 
 event: stage_skipped
 data: {"stage": "detect", "config_key": "c-baf1922"}
@@ -91,7 +91,11 @@ data: {"duration_s": 1200.5, "stages_completed": 7, "stages_skipped": 1}
 
 ### SSE Recovery on Browser Refresh
 
-When the `EventSource` connects (or reconnects), the server immediately sends a `pipeline_state` snapshot event containing the current status of all stages. This ensures the frontend can hydrate its state without missing events. The existing `GET /api/vision/status/{video_id}` endpoint provides this data — the SSE endpoint reuses that logic internally on connection.
+When the `EventSource` connects (or reconnects), it replays the full event log from position 0 (see broadcast event bus above). The first event is always a `pipeline_state` snapshot.
+
+**Download and transcribe recovery:** The current `GET /api/vision/status/{video_id}` only reports vision artifact stages (detections, tracks, teams, jerseys, court, renders) — it does not cover download or transcribe. The `pipeline_state` snapshot must include these non-vision stages. The orchestrator tracks download/transcribe status in its own `PipelineRun` state and includes them in the snapshot. For download, status is derived from whether the video file exists on disk. For transcribe, status is derived from whether the transcription JSON exists in `pipeline_data/api/transcriptions/whisper/`.
+
+**Run-scoped config keys:** The `pipeline_state` snapshot and all `stage_completed` events include the `config_key` used in the current run. This avoids the ambiguity of the existing `GET /api/vision/status/{video_id}` endpoint, which iterates config-key directories in sorted order and returns the first match — not necessarily the one from the current run. The orchestrator's in-memory `PipelineRun` is the authoritative source for which config keys belong to the active run. If no pipeline is active (server restart), the frontend falls back to `GET /api/vision/status/{video_id}` with best-effort semantics.
 
 ### Concurrent Pipeline Run Policy
 
@@ -141,15 +145,46 @@ Responsibilities:
 - Schedule stages respecting the dependency graph (see scheduling code above)
 - Compute `config_key` server-side from stage parameters using `artifacts.config_key()`
 - Pass upstream config keys between stages (detect's key flows to track, classify-teams, court-map; track's key flows to ocr)
-- Maintain an in-memory event bus per `video_id` (`asyncio.Queue` of SSE events)
+- Maintain a **broadcast event bus** per `video_id` (see below)
 - Run a progress poller task alongside each GPU call
 - Handle errors: mark failed stage + all downstream as error
 - Handle cancellation: cancel the asyncio.Task, mark active stages as error
 
+**Event bus — broadcast model (not single-consumer queue):**
+
+`asyncio.Queue` is single-consumer — one `EventSource` drains events and others miss them. This breaks reconnection and multiple browser tabs. Instead, the orchestrator uses an **append-only event log** with per-subscriber cursors:
+
+```python
+class EventBus:
+    """Broadcast event bus supporting multiple concurrent SSE consumers."""
+    def __init__(self):
+        self._events: list[dict] = []           # append-only log
+        self._notify = asyncio.Condition()       # wake subscribers on new events
+
+    async def emit(self, event: dict):
+        self._events.append(event)
+        async with self._notify:
+            self._notify.notify_all()
+
+    async def subscribe(self, cursor: int = 0):
+        """Yield events starting from cursor. Replays missed events on reconnect."""
+        while True:
+            while cursor < len(self._events):
+                yield self._events[cursor]
+                cursor += 1
+            async with self._notify:
+                await self._notify.wait()
+```
+
+Each SSE consumer calls `subscribe(cursor=0)` on connect and replays from position 0 (getting the full history including any events emitted before they connected). The first event in the log is always a `pipeline_state` snapshot. This handles:
+- Multiple browser tabs watching the same pipeline
+- Browser refresh mid-pipeline (reconnect replays from position 0)
+- The 409 response directing the client to attach to the existing stream
+
 State management:
 - Active pipeline runs stored in a module-level `dict[str, PipelineRun]`
-- Each `PipelineRun` holds the asyncio.Task, event queue, stage states, and computed config keys
-- Cleanup on pipeline completion, error, or cancellation
+- Each `PipelineRun` holds the asyncio.Task, `EventBus`, stage states, and computed config keys
+- Cleanup on pipeline completion, error, or cancellation (event log is retained until the next run starts, so late-connecting clients can still read final state)
 - On server restart, stale "active" sidecars are cleaned up by the existing `check_stale()` mechanism (10-minute timeout)
 
 ### Full Pipeline Endpoint
@@ -166,7 +201,7 @@ Optional `from_stage` parameter to re-run from a specific stage (cascade):
 ```
 POST /api/pipeline/run/{video_id}?from_stage=ocr
 ```
-This deletes artifacts for `ocr` and all downstream stages, then re-runs from `ocr` **using existing upstream artifacts with their current config keys**. The orchestrator reads the upstream sidecar files to discover the config keys that were used in the previous run.
+This deletes artifacts for `ocr` and all downstream stages, then re-runs from `ocr` **using existing upstream artifacts with their current config keys**. The orchestrator reads the upstream `config.resolved.json` files (written by `write_resolved_config()` in `artifacts.py`) to discover the config keys and upstream mappings from the previous run. Sidecars only store status/timestamps — the resolved config files store the full parameter and upstream chain.
 
 ### Individual Stage Re-run
 
@@ -455,7 +490,7 @@ export const deleteArtifact = (stage: string, videoId: string, configKey: string
 | `api/src/routers/captions.py` | Wrap `build_timeline()` in `asyncio.to_thread()`; add Logfire span |
 | `api/src/services/whisper_service.py` | Replace `requests` with `httpx.AsyncClient`; accept model param; clean up Logfire spans |
 | `api/src/services/vision_service.py` | No callback needed — progress polling is handled by orchestrator |
-| `api/src/schemas/vision.py` | Add `StageSettings` models per stage; update 202 response schemas |
+| `api/src/schemas/vision.py` | Add `StageSettings` models per stage; update 202 response schemas; add new fields to `TrackRequest` (iou_threshold, track_activation_threshold, lost_track_buffer) and `ClassifyTeamsRequest` (embedding_model, n_teams) |
 | `api/src/artifacts.py` | Add `delete_artifact()` function for the DELETE endpoint |
 | `api/src/config.py` | `whisper_model` becomes default fallback; dynamic model passed from settings |
 
@@ -463,7 +498,7 @@ export const deleteArtifact = (stage: string, videoId: string, configKey: string
 
 | File | Change |
 |------|--------|
-| `basket_tube/inference/main.py` | Write `_progress.json` (via atomic tmp+rename) during frame processing loops |
+| `basket_tube/inference/main.py` | Write `_progress.json` (via atomic tmp+rename) during frame processing loops; accept new Track and Teams parameters from updated request schemas |
 
 ### Modified Files — Frontend
 
