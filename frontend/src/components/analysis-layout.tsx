@@ -59,7 +59,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     if (stage === "download") {
       setDirectRunning("download");
       try {
-        await downloadVideo(selectedVideo.url === "local" ? selectedVideo.id : selectedVideo.url);
+        const res = await downloadVideo(selectedVideo.url === "local" ? selectedVideo.id : selectedVideo.url);
         markStageComplete("download");
       } finally {
         setDirectRunning(null);
@@ -69,8 +69,8 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     if (stage === "transcribe") {
       setDirectRunning("transcribe");
       try {
-        await transcribeVideo(selectedVideo.id, settings.stages.transcribe.use_youtube_captions);
-        markStageComplete("transcribe");
+        const res = await transcribeVideo(selectedVideo.id, settings.stages.transcribe.use_youtube_captions);
+        markStageComplete("transcribe", res.skipped);
       } finally {
         setDirectRunning(null);
       }
