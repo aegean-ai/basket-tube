@@ -18,12 +18,18 @@ class DetectRequest(BaseModel):
 class TrackRequest(BaseModel):
     det_config_key: str
     max_frames: int | None = None
+    sam2_checkpoint: str = "sam2.1_hiera_large.pt"
+    iou_threshold: float = 0.5
+    track_activation_threshold: float = 0.25
+    lost_track_buffer: int = 30
 
 
 class ClassifyTeamsRequest(BaseModel):
     det_config_key: str
     stride: int = 30
     crop_scale: float = 0.4
+    embedding_model: str = "google/siglip-base-patch16-224"
+    n_teams: int = 2
 
 
 class OCRRequest(BaseModel):
@@ -94,6 +100,12 @@ class RenderResponse(BaseModel):
     video_id: str
     config_key: str
     skipped: bool = False
+
+
+class StageAcceptedResponse(BaseModel):
+    stage: str
+    config_key: str
+    sse_url: str
 
 
 class StageStatusResponse(BaseModel):
