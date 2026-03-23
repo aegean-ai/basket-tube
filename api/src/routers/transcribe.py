@@ -90,7 +90,7 @@ async def transcribe_endpoint(
     if not video_path.exists():
         raise HTTPException(status_code=404, detail=f"Video file not found: {title}.mp4")
 
-    result = whisper_service.transcribe(str(video_path))
+    result = await whisper_service.transcribe(str(video_path))
     transcript_path.write_text(json.dumps(result))
 
     return TranscribeResponse(
