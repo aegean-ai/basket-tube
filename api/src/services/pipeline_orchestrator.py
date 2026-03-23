@@ -119,22 +119,39 @@ class PipelineOrchestrator:
                 await run.bus.emit({"event": "stage_completed", "stage": "download", "timestamp": time.time(), "duration_s": 0})
 
                 # 2. Detect
+                # GPU service uses: model_id, confidence, iou_threshold
                 if "detect" in skip_stages:
                     det_key = existing_keys.get("detections", "")
                     await run.bus.emit({"event": "stage_skipped", "stage": "detect", "config_key": det_key})
                 else:
-                    det_params = dict(stages_settings.get("detect", {}))
+                    ds = stages_settings.get("detect", {})
+                    det_params = {
+                        "model_id": ds.get("model_id", "basketball-player-detection-3-ycjdo/4"),
+                        "confidence": ds.get("confidence", 0.4),
+                        "iou_threshold": ds.get("iou_threshold", 0.9),
+                    }
                     det_key = await self._run_vision_stage(
                         run, "detect", "detections", stem, det_params, upstream={},
                     )
 
                 # 3. Parallel: track + classify-teams + court-map
-                track_params = dict(stages_settings.get("track", {}))
-                track_params["det_config_key"] = det_key
-                teams_params = dict(stages_settings.get("teams", {}))
-                teams_params["det_config_key"] = det_key
-                court_params = dict(stages_settings.get("court_map", {}))
-                court_params["det_config_key"] = det_key
+                # GPU service track uses: {"tracker": "bytetrack", "det_config_key": ...}
+                track_params = {"tracker": "bytetrack", "det_config_key": det_key}
+                # GPU service classify-teams uses: {"stride": ..., "crop_scale": ..., "det_config_key": ...}
+                ts = stages_settings.get("teams", {})
+                teams_params = {
+                    "stride": ts.get("stride", 30),
+                    "crop_scale": ts.get("crop_scale", 0.4),
+                    "det_config_key": det_key,
+                }
+                # GPU service court-map uses: {"model_id": ..., "keypoint_confidence": ..., "anchor_confidence": ..., "det_config_key": ...}
+                cs = stages_settings.get("court_map", {})
+                court_params = {
+                    "model_id": cs.get("model_id", "basketball-court-detection-2/14"),
+                    "keypoint_confidence": cs.get("keypoint_confidence", 0.3),
+                    "anchor_confidence": cs.get("anchor_confidence", 0.5),
+                    "det_config_key": det_key,
+                }
 
                 if "track" in skip_stages:
                     track_key = existing_keys.get("tracks", "")
@@ -159,8 +176,14 @@ class PipelineOrchestrator:
                     track_key = await track_task
 
                 # 4. OCR (needs track)
-                ocr_params = dict(stages_settings.get("ocr", {}))
-                ocr_params["track_config_key"] = track_key
+                # GPU service uses: {"model_id": ..., "n_consecutive": ..., "ocr_interval": ..., "track_config_key": ...}
+                os_ = stages_settings.get("ocr", {})
+                ocr_params = {
+                    "model_id": os_.get("model_id", "basketball-jersey-numbers-ocr/3"),
+                    "n_consecutive": os_.get("n_consecutive", 3),
+                    "ocr_interval": os_.get("ocr_interval", 5),
+                    "track_config_key": track_key,
+                }
                 ocr_task = asyncio.create_task(
                     self._run_vision_stage(run, "ocr", "jerseys", stem, ocr_params,
                                            upstream={"tracks": track_key})
