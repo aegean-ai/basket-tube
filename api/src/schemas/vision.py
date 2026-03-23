@@ -51,7 +51,7 @@ class RenderRequest(BaseModel):
     track_config_key: str
     teams_config_key: str
     jerseys_config_key: str
-    court_config_key: str
+    court_config_key: str | None = None  # optional — render works without court
 
 
 # ---------------------------------------------------------------------------

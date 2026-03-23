@@ -395,17 +395,55 @@ async def court_map(video_id: str, req: CourtMapRequest):
 
 @router.post("/render/{video_id}", response_model=RenderResponse)
 async def render(video_id: str, req: RenderRequest):
-    """Composite all pipeline outputs into a final annotated video (stub)."""
+    """Composite all pipeline outputs into a final annotated video."""
     stem = _resolve_or_404(video_id)
 
-    # Check all upstream stages exist
+    # Check upstream stages exist (court is optional for render)
     _require_upstream("detections", video_id, stem, req.det_config_key)
     _require_upstream("tracks", video_id, stem, req.track_config_key)
     _require_upstream("teams", video_id, stem, req.teams_config_key)
     _require_upstream("jerseys", video_id, stem, req.jerseys_config_key)
-    _require_upstream("court", video_id, stem, req.court_config_key)
 
-    raise HTTPException(status_code=501, detail="Render not yet implemented")
+    cfg_params = {
+        "det_config_key": req.det_config_key,
+        "track_config_key": req.track_config_key,
+        "teams_config_key": req.teams_config_key,
+        "jerseys_config_key": req.jerseys_config_key,
+    }
+    cfg_key = config_key(cfg_params)
+    out = artifact_path(settings.data_dir, "renders", cfg_key, stem)
+    sidecar = status_path_for(out)
+
+    if out.exists():
+        return RenderResponse(video_id=video_id, config_key=cfg_key, skipped=True)
+
+    _check_not_running(sidecar, "render")
+    write_status(sidecar, "active", config_key=cfg_key)
+
+    svc = _get_vision_service()
+    try:
+        result = await svc.render(video_id, cfg_params, upstream_configs={
+            "detections": req.det_config_key,
+            "tracks": req.track_config_key,
+            "teams": req.teams_config_key,
+            "jerseys": req.jerseys_config_key,
+        })
+    except httpx.HTTPStatusError as exc:
+        write_status(sidecar, "error", error=str(exc))
+        raise HTTPException(status_code=500, detail=f"GPU service error: {exc}") from exc
+    except httpx.ConnectError as exc:
+        write_status(sidecar, "error", error=str(exc))
+        raise HTTPException(status_code=502, detail=f"GPU service unreachable: {exc}") from exc
+
+    write_status(sidecar, "complete", config_key=cfg_key)
+    write_resolved_config(
+        output_dir=out.parent, stage="render", config_key=cfg_key,
+        params=cfg_params, upstream={
+            "detections": req.det_config_key, "tracks": req.track_config_key,
+            "teams": req.teams_config_key, "jerseys": req.jerseys_config_key,
+        },
+    )
+    return RenderResponse(video_id=video_id, config_key=cfg_key, skipped=False)
 
 
 @router.get("/status/{video_id}", response_model=PipelineStatusResponse)

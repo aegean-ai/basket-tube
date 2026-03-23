@@ -657,3 +657,164 @@ async def classify_teams(req: InferenceRequest):
         if _logfire:
             logfire.error("classify_teams.failed error={error}", error=str(e))
         return InferenceResponse(status="error", config_key="", output_path="", error=str(e))
+
+
+# ── Render (annotated video) ──────────────────────────────────────────
+
+PLAYER_CLASS_IDS = [3, 4, 5, 6, 7]  # player, possession, jump-shot, layup-dunk, shot-block
+
+@app.post("/api/render", response_model=InferenceResponse)
+async def render(req: InferenceRequest):
+    try:
+        stem = resolve_stem(req.video_id)
+        if not stem:
+            return InferenceResponse(status="error", config_key="", output_path="", error=f"Unknown video_id: {req.video_id}")
+
+        det_config_key = req.upstream_configs.get("detections", "")
+        track_config_key = req.upstream_configs.get("tracks", "")
+        teams_config_key = req.upstream_configs.get("teams", "")
+        jerseys_config_key = req.upstream_configs.get("jerseys", "")
+
+        cfg_params = {
+            "det_config_key": det_config_key,
+            "track_config_key": track_config_key,
+            "teams_config_key": teams_config_key,
+            "jerseys_config_key": jerseys_config_key,
+        }
+        cfg_key = config_key(cfg_params)
+        out = artifact_path(DATA_DIR, "renders", cfg_key, stem)
+
+        if out.exists():
+            _log_info("render.cache_hit video_id={video_id}", video_id=req.video_id)
+            return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
+
+        # Load upstream artifacts
+        det_path = artifact_path(DATA_DIR, "detections", det_config_key, stem)
+        track_path = artifact_path(DATA_DIR, "tracks", track_config_key, stem)
+        teams_path = artifact_path(DATA_DIR, "teams", teams_config_key, stem)
+        jerseys_path = artifact_path(DATA_DIR, "jerseys", jerseys_config_key, stem)
+
+        for p, name in [(det_path, "detections"), (track_path, "tracks"), (teams_path, "teams"), (jerseys_path, "jerseys")]:
+            if not p.exists():
+                return InferenceResponse(status="error", config_key=cfg_key, output_path="", error=f"{name} artifact not found")
+
+        det_data = json.loads(det_path.read_text())
+        track_data = json.loads(track_path.read_text())
+        teams_data = json.loads(teams_path.read_text())
+        jerseys_data = json.loads(jerseys_path.read_text())
+
+        video_path = DATA_DIR / "videos" / f"{stem}.mp4"
+        if not video_path.exists():
+            return InferenceResponse(status="error", config_key=cfg_key, output_path="", error=f"Video not found: {video_path}")
+
+        start_t = time.time()
+        span = logfire.span("render.process", video_id=req.video_id) if _logfire else None
+        if span:
+            span.__enter__()
+
+        try:
+            video_info = sv.VideoInfo.from_video_path(str(video_path))
+            total_frames = video_info.total_frames
+
+            # Build lookup tables from artifacts
+            team_map = {}  # tracker_id -> team_id (0 or 1)
+            for a in teams_data.get("assignments", []):
+                team_map[a["tracker_id"]] = a["team_id"]
+
+            jersey_map = jerseys_data.get("players", {})  # str(tracker_id) -> str(number)
+
+            # Team colors from palette
+            palette = teams_data.get("palette", {})
+            color_0 = palette.get("0", {}).get("color", "#006BB6")
+            color_1 = palette.get("1", {}).get("color", "#007A33")
+            team_colors = sv.ColorPalette.from_hex([color_0, color_1])
+
+            # Annotators
+            team_box_annotator = sv.BoxAnnotator(
+                color=team_colors, thickness=2, color_lookup=sv.ColorLookup.INDEX
+            )
+            team_label_annotator = sv.LabelAnnotator(
+                color=team_colors,
+                text_color=sv.Color.WHITE,
+                text_position=sv.Position.BOTTOM_CENTER,
+                color_lookup=sv.ColorLookup.INDEX,
+            )
+
+            # Build per-frame track data lookup
+            track_frames = {f["frame_index"]: f for f in track_data.get("frames", [])}
+
+            # Temp output path then compress
+            out.parent.mkdir(parents=True, exist_ok=True)
+            tmp_video = out.parent / f"{stem}_raw.mp4"
+
+            with sv.VideoSink(str(tmp_video), video_info) as sink:
+                for idx, frame in enumerate(sv.get_video_frames_generator(str(video_path))):
+                    if idx % 10 == 0:
+                        write_progress(out.parent, frame=idx, total_frames=total_frames)
+
+                    track_frame = track_frames.get(idx)
+                    if track_frame is None:
+                        sink.write_frame(frame)
+                        continue
+
+                    # Reconstruct detections from track data
+                    xyxy_list = track_frame.get("xyxy", [])
+                    tracker_ids = track_frame.get("tracker_id", [])
+                    class_ids = track_frame.get("class_id", [])
+
+                    if not xyxy_list:
+                        sink.write_frame(frame)
+                        continue
+
+                    xyxy = np.array(xyxy_list, dtype=np.float32)
+                    tracker_id = np.array(tracker_ids, dtype=int)
+                    class_id = np.array(class_ids, dtype=int)
+
+                    # Filter to player classes only
+                    player_mask = np.isin(class_id, PLAYER_CLASS_IDS)
+                    if not player_mask.any():
+                        sink.write_frame(frame)
+                        continue
+
+                    xyxy = xyxy[player_mask]
+                    tracker_id = tracker_id[player_mask]
+
+                    detections = sv.Detections(xyxy=xyxy, tracker_id=tracker_id)
+
+                    # Build team color lookup and labels
+                    teams = np.array([team_map.get(int(tid), 0) for tid in tracker_id], dtype=int)
+                    labels = [f"#{jersey_map.get(str(int(tid)), '?')}" for tid in tracker_id]
+
+                    annotated = frame.copy()
+                    annotated = team_box_annotator.annotate(
+                        scene=annotated, detections=detections, custom_color_lookup=teams
+                    )
+                    annotated = team_label_annotator.annotate(
+                        scene=annotated, detections=detections, labels=labels, custom_color_lookup=teams
+                    )
+                    sink.write_frame(annotated)
+
+            # Compress with ffmpeg
+            import subprocess
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", str(tmp_video),
+                 "-vcodec", "libx264", "-crf", "28", str(out)],
+                check=True,
+            )
+            tmp_video.unlink(missing_ok=True)
+            (out.parent / "_progress.json").unlink(missing_ok=True)
+
+            elapsed = time.time() - start_t
+            _log_info("render.complete video_id={video_id} frames={n} elapsed={elapsed:.1f}s",
+                       video_id=req.video_id, n=total_frames, elapsed=elapsed)
+
+            return InferenceResponse(status="ok", config_key=cfg_key, output_path=str(out.relative_to(DATA_DIR)))
+        finally:
+            if span:
+                span.__exit__(None, None, None)
+
+    except Exception as e:
+        logger.exception("Render failed")
+        if _logfire:
+            logfire.error("render.failed error={error}", error=str(e))
+        return InferenceResponse(status="error", config_key="", output_path="", error=str(e))

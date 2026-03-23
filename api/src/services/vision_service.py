@@ -72,3 +72,7 @@ class VisionService:
     async def classify_teams(self, video_id: str, params: dict, **kw: Any) -> dict:
         payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
         return await self._post("/api/classify-teams", payload)
+
+    async def render(self, video_id: str, params: dict, **kw: Any) -> dict:
+        payload = self._inference_payload(video_id, params, kw.get("upstream_configs"))
+        return await self._post("/api/render", payload)

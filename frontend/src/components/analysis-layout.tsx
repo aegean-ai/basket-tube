@@ -100,6 +100,18 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
           markStageComplete("court-map", { skipped: res.skipped, config_key: res.config_key });
           break;
         }
+        case "render": {
+          const teamsKey = state.stages["classify-teams"].config_key ?? "";
+          const jerseysKey = state.stages.ocr.config_key ?? "";
+          const res = await api.renderVideo(vid, {
+            det_config_key: detKey,
+            track_config_key: trackKey,
+            teams_config_key: teamsKey,
+            jerseys_config_key: jerseysKey,
+          });
+          markStageComplete("render", { skipped: res.skipped, config_key: res.config_key });
+          break;
+        }
       }
     } catch (err) {
       markStageError(stage, err instanceof Error ? err.message : String(err));
@@ -116,7 +128,7 @@ export function AnalysisLayout({ videos }: AnalysisLayoutProps) {
     // Map stage name to artifact directory name
     const artifactDir: Record<string, string> = {
       detect: "detections", track: "tracks", ocr: "jerseys",
-      "classify-teams": "teams", "court-map": "court",
+      "classify-teams": "teams", "court-map": "court", render: "renders",
     };
     const dir = artifactDir[stage];
     if (dir && configKey) {
