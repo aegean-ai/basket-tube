@@ -309,11 +309,17 @@ async def ocr(req: InferenceRequest):
 
         try:
             tracks_data = json.loads(tracks_path.read_text())
+            det_config_key = req.upstream_configs.get("detections", "")
+            det_path = artifact_path(DATA_DIR, "detections", det_config_key, stem) if det_config_key else None
+
             video_path = DATA_DIR / "videos" / f"{stem}.mp4"
-            model = get_model(model_id)
+            ocr_model = get_model(model_id)
+            detection_model = get_model(PLAYER_DETECTION_MODEL_ID)
 
             from sports import ConsecutiveValueTracker
             number_validator = ConsecutiveValueTracker(n_consecutive=n_consecutive)
+
+            NUMBER_CLASS_ID = 2  # "number" class from RF-DETR
 
             frame_generator = sv.get_video_frames_generator(str(video_path))
             n_ocr_frames = 0
@@ -328,34 +334,60 @@ async def ocr(req: InferenceRequest):
 
                 frame_track = tracks_data["frames"][idx]
                 tracker_ids = frame_track.get("tracker_ids", [])
-                xyxy_list = frame_track.get("xyxy", [])
+                player_xyxy = frame_track.get("xyxy", [])
 
-                if not tracker_ids or not xyxy_list:
+                if not tracker_ids or not player_xyxy:
                     continue
 
                 n_ocr_frames += 1
                 frame_h, frame_w = frame.shape[:2]
-                frame_tids = []
-                frame_numbers = []
-                for tid, box in zip(tracker_ids, xyxy_list):
-                    x1, y1, x2, y2 = [int(c) for c in box]
-                    x1, y1 = max(0, x1 - 10), max(0, y1 - 10)
-                    x2, y2 = min(frame_w, x2 + 10), min(frame_h, y2 + 10)
-                    crop = frame[y1:y2, x1:x2]
-                    if crop.size == 0:
-                        continue
-                    crop_resized = cv2.resize(crop, (224, 224))
-                    number_str = run_ocr(model, crop_resized, OCR_PROMPT)
-                    frame_tids.append(tid)
-                    frame_numbers.append(number_str)
-                    n_ocr_reads += 1
-                if frame_tids:
-                    number_validator.update(frame_tids, frame_numbers)
+
+                # Step 1: Run RF-DETR to find number regions (class_id=2)
+                det_result = run_detection(detection_model, frame, 0.4, 0.9)
+                all_dets = sv.Detections.from_inference(det_result)
+                number_dets = all_dets[all_dets.class_id == NUMBER_CLASS_ID]
+
+                if len(number_dets) == 0:
+                    continue
+
+                # Step 2: OCR only the detected number crops
+                number_crops = [
+                    sv.crop_image(frame, xyxy)
+                    for xyxy in sv.clip_boxes(
+                        sv.pad_boxes(xyxy=number_dets.xyxy, px=10, py=10),
+                        (frame_w, frame_h),
+                    )
+                ]
+                numbers = [
+                    run_ocr(ocr_model, cv2.resize(crop, (224, 224)), OCR_PROMPT)
+                    for crop in number_crops if crop.size > 0
+                ]
+                n_ocr_reads += len(numbers)
+
+                # Step 3: Match numbers to players via IoS (mask overlap)
+                player_boxes = np.array(player_xyxy)
+                player_masks = sv.xyxy_to_mask(boxes=player_boxes, resolution_wh=(frame_w, frame_h))
+                number_masks = sv.xyxy_to_mask(boxes=number_dets.xyxy, resolution_wh=(frame_w, frame_h))
+
+                iou = sv.mask_iou_batch(
+                    masks_true=player_masks,
+                    masks_detection=number_masks,
+                    overlap_metric=sv.OverlapMetric.IOS,
+                )
+
+                # Find pairs above IoS threshold 0.9
+                rows, cols = np.where(iou > 0.9)
+                if len(rows) > 0:
+                    matched_tids = [tracker_ids[int(r)] for r in rows]
+                    matched_numbers = [numbers[int(c)] for c in cols if int(c) < len(numbers)]
+                    if matched_tids and matched_numbers:
+                        number_validator.update(matched_tids[:len(matched_numbers)], matched_numbers)
 
                 if n_ocr_frames % 50 == 0:
                     validated_so_far = number_validator.validated_dict()
-                    _log_info("ocr.progress frame={frame} ocr_frames={n_ocr} reads={reads} validated={n_val}",
-                              frame=idx, n_ocr=n_ocr_frames, reads=n_ocr_reads, n_val=len(validated_so_far))
+                    _log_info("ocr.progress frame={frame} ocr_frames={n_ocr} reads={reads} number_dets={n_num} validated={n_val}",
+                              frame=idx, n_ocr=n_ocr_frames, reads=n_ocr_reads,
+                              n_num=len(number_dets), n_val=len(validated_so_far))
 
             players = {}
             validated = number_validator.validated_dict()
