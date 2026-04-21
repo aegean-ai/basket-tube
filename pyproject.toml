@@ -34,7 +34,7 @@ dev = [
     "pytest",
     "httpx",
     "pytest-asyncio",
-    "nbconvert>=7.17.0",
+    "nbconvert>=7.17.1",
 ]
 alignment = [
     "logfire[fastapi]",
